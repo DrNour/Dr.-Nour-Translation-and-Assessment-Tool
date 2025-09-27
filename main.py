@@ -3,11 +3,11 @@ import streamlit as st
 st.set_page_config(page_title="Nour Translation & Assessment Tool", layout="wide")
 st.title("Nour Translation & Assessment Tool")
 
+# --- Crash-safe imports ---
 try:
-    from modules.postediting import calculate_edit_distance, calculate_edit_ratio, highlight_errors, PostEditSession
+    from modules.postediting import *
 except ModuleNotFoundError:
-    st.warning("Post-edit metrics module not found.")
-    calculate_edit_distance = calculate_edit_ratio = highlight_errors = PostEditSession = None
+    st.warning("Post-edit metrics module not found. Core evaluation may be limited.")
 
 try:
     from modules.instructor import instructor_dashboard
@@ -27,17 +27,14 @@ except ModuleNotFoundError:
     st.warning("Gamification module not found.")
     leaderboard = lambda: None
 
-try:
-    from modules.badges import award_badge
-except ModuleNotFoundError:
-    st.warning("Badges module not found.")
-    award_badge = lambda *args, **kwargs: None
-
+# --- User Selection ---
 user_type = st.radio("Login as:", ["Instructor", "Student"], index=1)
 
+# --- Interface Display ---
 if user_type == "Instructor":
     instructor_dashboard()
-elif user_type == "Student":
+else:
     student_dashboard()
 
+# --- Leaderboard ---
 leaderboard()
