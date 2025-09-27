@@ -1,17 +1,9 @@
-# instructor.py
 import streamlit as st
+import pandas as pd
 
-def run_feature():
+def instructor_panel():
     st.header("Instructor Interface")
-    
-    st.subheader("Create a New Exercise")
-    exercise_text = st.text_area("Text for Students to Translate")
-    submit_button = st.button("Add Exercise")
-    
-    if submit_button:
-        # TODO: Save the exercise in a database or local file
-        st.success("Exercise added successfully (placeholder).")
-    
-    st.subheader("Download Submissions")
-    # TODO: List exercises and allow downloading student submissions
-    st.info("Download functionality will be implemented here.")
+    new_exercise = st.text_area("Create a new translation exercise:")
+    if st.button("Save Exercise"):
+        # Save to CSV or DB
+        st.success("Exercise saved!")
