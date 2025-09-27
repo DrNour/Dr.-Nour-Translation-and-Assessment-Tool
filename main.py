@@ -4,7 +4,7 @@ import time
 st.set_page_config(page_title="Nour Translation & Assessment Tool", layout="wide")
 st.title("Nour Translation & Assessment Tool")
 
-# --- Crash-Safe Imports ---
+# --- Modular Imports (Crash-Safe) ---
 try:
     from modules.postediting import calculate_edit_distance, calculate_edit_ratio, highlight_errors, PostEditSession
 except ModuleNotFoundError:
