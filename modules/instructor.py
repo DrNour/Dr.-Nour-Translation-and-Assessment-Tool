@@ -1,28 +1,33 @@
 import streamlit as st
+import json
+from pathlib import Path
 
-# --- In-memory storage ---
-exercises = {}
-submissions = {}
+EXERCISE_FILE = Path(__file__).parent / "exercises.json"
+
+def load_exercises():
+    if EXERCISE_FILE.exists():
+        with open(EXERCISE_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return []
+
+def save_exercise(exercise):
+    exercises = load_exercises()
+    exercises.append(exercise)
+    with open(EXERCISE_FILE, "w", encoding="utf-8") as f:
+        json.dump(exercises, f, ensure_ascii=False, indent=2)
 
 def instructor_dashboard():
-    st.subheader("Instructor Dashboard")
-    menu = st.radio("Menu", ["Create Exercise", "View Submissions"])
-
-    if menu == "Create Exercise":
-        exercise_id = st.text_input("Exercise ID")
-        text = st.text_area("Source Text")
-        if st.button("Create Exercise"):
-            if exercise_id and text:
-                exercises[exercise_id] = text
-                st.success(f"Exercise '{exercise_id}' created!")
-            else:
-                st.warning("Please provide ID and text.")
-
-    elif menu == "View Submissions":
-        exercise_id = st.selectbox("Select Exercise", list(submissions.keys()) or ["None"])
-        if exercise_id != "None":
-            for student, data in submissions[exercise_id].items():
-                st.write(f"Student: {student}")
-                st.write(f"Translation: {data['translation']}")
-                st.write(f"Post-edit: {data.get('postedit', '')}")
-                st.write(f"Time spent: {data.get('time', '')} seconds")
+    st.header("Instructor Dashboard")
+    
+    exercise_text = st.text_area("Exercise Text")
+    reference_translation = st.text_area("Reference Translation (optional)")
+    
+    if st.button("Create Exercise"):
+        if not exercise_text.strip():
+            st.warning("Exercise text cannot be empty")
+        else:
+            save_exercise({
+                "text": exercise_text,
+                "reference": reference_translation
+            })
+            st.success("Exercise saved successfully!")
