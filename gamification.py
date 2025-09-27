@@ -1,5 +1,11 @@
+# modules/gamification.py
 import streamlit as st
 
-def show_leaderboard(data):
+def leaderboard():
     st.subheader("Leaderboard")
-    st.table(data)
+    # Dummy leaderboard
+    st.table([
+        {"Student": "Alice", "Score": 95},
+        {"Student": "Bob", "Score": 88},
+        {"Student": "Charlie", "Score": 76},
+    ])
