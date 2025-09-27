@@ -4,29 +4,60 @@ st.set_page_config(page_title="Nour Translation & Assessment Tool", layout="wide
 st.title("Nour Translation & Assessment Tool")
 
 # --- Modular Imports (Crash-Safe) ---
-try:
-    from modules.postedit_metrics import calculate_edit_distance, calculate_edit_ratio, highlight_errors, PostEditSession
-except ModuleNotFoundError:
-    st.warning("Post-edit metrics module not found. Core evaluation may be limited.")
-    calculate_edit_distance = calculate_edit_ratio = highlight_errors = PostEditSession = None
+def safe_import(module_name, fallback):
+    try:
+        return __import__(module_name). __dict__
+    except ModuleNotFoundError:
+        st.warning(f"{module_name} not found. Feature disabled.")
+        return fallback
 
+# Import instructor
 try:
-    from modules.instructor_interface import instructor_dashboard
-except ModuleNotFoundError:
-    st.warning("Instructor interface module not found. Instructor features disabled.")
+    from instructor import instructor_dashboard
+except:
     instructor_dashboard = lambda: st.info("Instructor dashboard unavailable.")
 
+# Import student
 try:
-    from modules.student_interface import student_dashboard
-except ModuleNotFoundError:
-    st.warning("Student interface module not found. Student features disabled.")
+    from student_interface import student_dashboard
+except:
     student_dashboard = lambda: st.info("Student dashboard unavailable.")
 
+# Gamification
 try:
-    from modules.gamification import leaderboard
-except ModuleNotFoundError:
-    st.warning("Gamification module not found. Leaderboard features disabled.")
+    from gamification import leaderboard
+except:
     leaderboard = lambda: None
+
+# Postediting
+try:
+    from postediting import calculate_edit_distance, calculate_edit_ratio, highlight_errors, PostEditSession
+except:
+    calculate_edit_distance = calculate_edit_ratio = highlight_errors = PostEditSession = None
+
+# Error analysis
+try:
+    from error_analysis import analyze_errors
+except:
+    analyze_errors = lambda s, t: []
+
+# Time tracking
+try:
+    from time_tracking import track_session
+except:
+    track_session = lambda: None
+
+# Suggestions
+try:
+    from suggestions import suggest_exercises
+except:
+    suggest_exercises = lambda history: []
+
+# Badges
+try:
+    from badges import award_badges
+except:
+    award_badges = lambda score: []
 
 # --- User Selection ---
 user_type = st.radio("Login as:", ["Instructor", "Student"], index=1)
