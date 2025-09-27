@@ -1,36 +1,31 @@
-# modules/postedit_metrics.py
-import streamlit as st
-
-def calculate_edit_distance(original, edited):
-    # Simple placeholder for edit distance
-    return abs(len(original) - len(edited))
-
-def calculate_edit_ratio(original, edited):
-    # Simple placeholder for edit ratio
-    if len(original) == 0:
-        return 0
-    return calculate_edit_distance(original, edited) / len(original)
-
-def highlight_errors(original, edited):
-    # Dummy function to "highlight" differences
-    errors = []
-    min_len = min(len(original), len(edited))
-    for i in range(min_len):
-        if original[i] != edited[i]:
-            errors.append((i, original[i], edited[i]))
-    return errors
+from difflib import SequenceMatcher
+import time
 
 class PostEditSession:
-    def __init__(self, original, edited):
-        self.original = original
-        self.edited = edited
-        self.edit_distance = calculate_edit_distance(original, edited)
-        self.edit_ratio = calculate_edit_ratio(original, edited)
-        self.errors = highlight_errors(original, edited)
+    def __init__(self, source, mt_output, student_output):
+        self.source = source
+        self.mt_output = mt_output
+        self.student_output = student_output
+        self.start_time = time.time()
+        self.end_time = None
 
-    def summary(self):
-        return {
-            "edit_distance": self.edit_distance,
-            "edit_ratio": self.edit_ratio,
-            "errors": self.errors
-        }
+    def end(self):
+        self.end_time = time.time()
+
+    def editing_time(self):
+        if self.end_time:
+            return self.end_time - self.start_time
+        return None
+
+def calculate_edit_distance(mt_output, student_output):
+    return sum(1 for a, b in zip(mt_output, student_output) if a != b)
+
+def calculate_edit_ratio(mt_output, student_output):
+    matcher = SequenceMatcher(None, mt_output, student_output)
+    return 1 - matcher.ratio()
+
+def highlight_errors(source, student_output):
+    errors = []
+    if not student_output.endswith("."):
+        errors.append("Missing final period.")
+    return errors
