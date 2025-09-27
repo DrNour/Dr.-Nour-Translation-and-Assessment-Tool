@@ -1,41 +1,41 @@
-# main.py
 import streamlit as st
-from postedit_metrics import calculate_edit_distance, calculate_edit_ratio, highlight_errors, PostEditSession
 
-st.set_page_config(page_title="Translation Evaluation Tool", layout="wide")
-st.title("Dr. Nour Translation & Post-Editing Assessment Tool")
+st.set_page_config(page_title="Nour Translation & Assessment Tool", layout="wide")
+st.title("Nour Translation & Assessment Tool")
 
-# Student submission interface
-st.header("Student Translation Submission")
-source_text = st.text_area("Source Text", height=100)
-student_translation = st.text_area("Your Translation / Post-Edit", height=100)
-optional_reference = st.text_area("Optional Reference Translation", height=100)
+# --- Modular Imports (Crash-Safe) ---
+try:
+    from modules.postedit_metrics import calculate_edit_distance, calculate_edit_ratio, highlight_errors, PostEditSession
+except ModuleNotFoundError:
+    st.warning("Post-edit metrics module not found. Core evaluation may be limited.")
+    calculate_edit_distance = calculate_edit_ratio = highlight_errors = PostEditSession = None
 
-# Post-editing session tracker
-session = PostEditSession()
-if st.button("Start Editing"):
-    session.start()
-    st.success("Editing session started! Time is being tracked.")
+try:
+    from modules.instructor_interface import instructor_dashboard
+except ModuleNotFoundError:
+    st.warning("Instructor interface module not found. Instructor features disabled.")
+    instructor_dashboard = lambda: st.info("Instructor dashboard unavailable.")
 
-if st.button("Finish Editing"):
-    session.end()
-    session.add_keystrokes(len(student_translation))
-    st.success(f"Editing session finished! Duration: {session.get_duration()} sec, Keystrokes: {session.keystrokes}")
+try:
+    from modules.student_interface import student_dashboard
+except ModuleNotFoundError:
+    st.warning("Student interface module not found. Student features disabled.")
+    student_dashboard = lambda: st.info("Student dashboard unavailable.")
 
-# Evaluate translations
-if st.button("Evaluate Translation"):
-    if source_text and student_translation:
-        distance = calculate_edit_distance(source_text, student_translation)
-        ratio = calculate_edit_ratio(source_text, student_translation)
-        errors = highlight_errors(source_text, student_translation)
+try:
+    from modules.gamification import leaderboard
+except ModuleNotFoundError:
+    st.warning("Gamification module not found. Leaderboard features disabled.")
+    leaderboard = lambda: None
 
-        st.subheader("Post-Editing Metrics")
-        st.write(f"Edit Distance: {distance}")
-        st.write(f"Normalized Edit Distance: {ratio:.2f}")
-        st.write("Detected Errors (positions & type):")
-        st.write(errors)
+# --- User Selection ---
+user_type = st.radio("Login as:", ["Instructor", "Student"], index=1)
 
-        st.subheader("Session Summary")
-        st.write(session.summary())
-    else:
-        st.warning("Please enter both source text and your translation.")
+# --- Interface Display ---
+if user_type == "Instructor":
+    instructor_dashboard()
+elif user_type == "Student":
+    student_dashboard()
+
+# --- Optional Leaderboard ---
+leaderboard()
