@@ -1,43 +1,63 @@
 import streamlit as st
+import json
 import os
-import pandas as pd
-from datetime import datetime
+from evaluation import evaluate_translation
 
-DATA_FILE = "submissions.csv"
+EXERCISE_FILE = "data/exercises.json"
+SUBMISSION_FILE = "data/submissions.json"
+os.makedirs("data", exist_ok=True)
+
+def load_exercises():
+    if os.path.exists(EXERCISE_FILE):
+        with open(EXERCISE_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return []
+
+def save_submission(submission):
+    submissions = []
+    if os.path.exists(SUBMISSION_FILE):
+        with open(SUBMISSION_FILE, "r", encoding="utf-8") as f:
+            submissions = json.load(f)
+    submissions.append(submission)
+    with open(SUBMISSION_FILE, "w", encoding="utf-8") as f:
+        json.dump(submissions, f, ensure_ascii=False, indent=2)
 
 def student_dashboard():
-    st.subheader("Student Workspace")
+    st.header("Student Dashboard")
 
-    student_name = st.text_input("Enter your name")
-    source_text = st.text_area("Source Text (ST)")
-    target_translation = st.text_area("Your Translation (TT)")
-    reference = st.text_area("Reference Translation (optional)")
+    exercises = load_exercises()
+    if not exercises:
+        st.info("No exercises available yet. Please check back later.")
+        return
 
-    mode = st.radio("Mode:", ["Translate from Scratch", "Post-edit MT Output"])
+    # Select exercise
+    titles = [ex["title"] for ex in exercises]
+    choice = st.selectbox("Choose an Exercise:", titles)
 
-    if st.button("Submit"):
-        if not student_name or not target_translation:
-            st.error("Name and translation are required.")
-            return
+    selected = next((ex for ex in exercises if ex["title"] == choice), None)
 
-        # create dataframe row
-        new_entry = {
-            "student": student_name,
-            "mode": mode,
-            "source": source_text,
-            "translation": target_translation,
-            "reference": reference,
-            "timestamp": datetime.now().isoformat()
-        }
+    if selected:
+        st.subheader("Source Text")
+        st.write(selected["source_text"])
 
-        # append to file
-        if os.path.exists(DATA_FILE):
-            df = pd.read_csv(DATA_FILE)
-            df = pd.concat([df, pd.DataFrame([new_entry])], ignore_index=True)
-        else:
-            df = pd.DataFrame([new_entry])
+        translation = st.text_area("Your Translation")
 
-        df.to_csv(DATA_FILE, index=False)
+        if st.button("Submit Translation"):
+            if translation.strip():
+                scores = {}
+                if selected["reference"].strip():
+                    scores = evaluate_translation(translation, selected["reference"])
 
-        st.success("✅ Submission saved successfully!")
-        st.balloons()
+                submission = {
+                    "exercise": selected["title"],
+                    "student_translation": translation,
+                    "scores": scores
+                }
+                save_submission(submission)
+
+                st.success("Submission saved successfully!")
+                if scores:
+                    st.subheader("Evaluation Results")
+                    st.json(scores)
+            else:
+                st.error("Please enter your translation before submitting.")
