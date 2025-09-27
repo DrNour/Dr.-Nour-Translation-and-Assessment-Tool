@@ -34,7 +34,7 @@ try:
     from postediting import calculate_edit_distance, calculate_edit_ratio, highlight_errors, PostEditSession
 except:
     calculate_edit_distance = calculate_edit_ratio = highlight_errors = PostEditSession = None
-    try:
+try:
     from postedit_interface import postedit_dashboard
 except ModuleNotFoundError:
     st.warning("Post-edit interface unavailable.")
@@ -80,4 +80,5 @@ elif user_type == "Student":
 
 # --- Optional Leaderboard ---
 leaderboard()
+
 
