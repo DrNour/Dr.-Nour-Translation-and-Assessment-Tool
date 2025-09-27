@@ -1,5 +1,10 @@
-# modules/badges.py
+import streamlit as st
 
-def award_badge(student_id, badge_name):
-    # Placeholder: implement badge logic here
-    print(f"Badge '{badge_name}' awarded to student {student_id}")
+badges_awarded = {}
+
+def award_badge(student_name, badge_name):
+    if student_name not in badges_awarded:
+        badges_awarded[student_name] = []
+    if badge_name not in badges_awarded[student_name]:
+        badges_awarded[student_name].append(badge_name)
+        st.success(f"{student_name} earned badge: {badge_name}")
