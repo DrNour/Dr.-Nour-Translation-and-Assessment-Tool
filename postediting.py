@@ -1,46 +1,31 @@
-import streamlit as st
+# postedit_metrics.py
 import time
 
-# Dummy MT output function (replace with real MT API if desired)
-def get_mt_output(source_text):
-    # For demonstration, just reverse the text
-    return source_text[::-1]
+def calculate_edit_distance(src, tgt):
+    # Dummy placeholder
+    return abs(len(src) - len(tgt))
 
-def postedit_dashboard():
-    st.header("Student Post-Editing Interface")
+def calculate_edit_ratio(src, tgt):
+    # Dummy placeholder
+    if len(src) == 0:
+        return 0.0
+    return calculate_edit_distance(src, tgt) / len(src)
 
-    # Step 1: Input source text
-    source_text = st.text_area("Enter the source text to translate:", height=150)
+def highlight_errors(src, tgt):
+    # Dummy: highlight differences
+    errors = []
+    for i, (s_char, t_char) in enumerate(zip(src, tgt)):
+        if s_char != t_char:
+            errors.append((i, s_char, t_char))
+    return errors
 
-    if source_text:
-        # Step 2: Choose mode
-        mode = st.radio("Choose your translation mode:", ["Translate from scratch", "Post-edit MT output"])
+class PostEditSession:
+    def __init__(self):
+        self.start_time = time.time()
+        self.keystrokes = 0
 
-        # Step 3: Show text box for translation
-        if mode == "Translate from scratch":
-            student_translation = st.text_area("Your Translation:", height=150)
-        else:
-            mt_output = get_mt_output(source_text)
-            student_translation = st.text_area("Post-edit MT Output:", value=mt_output, height=150)
+    def add_keystrokes(self, count):
+        self.keystrokes += count
 
-        # Step 4: Track time
-        if "start_time" not in st.session_state:
-            st.session_state.start_time = time.time()
-
-        # Step 5: Submit button
-        if st.button("Submit Translation"):
-            elapsed_time = time.time() - st.session_state.start_time
-            st.success("Translation submitted successfully!")
-            st.write(f"Time spent (seconds): {round(elapsed_time, 2)}")
-            
-            # Optionally: store submission, mode, and elapsed_time in database or file
-            submission = {
-                "source_text": source_text,
-                "student_translation": student_translation,
-                "mode": mode,
-                "time_spent": elapsed_time
-            }
-            st.json(submission)
-            
-            # Reset timer
-            st.session_state.start_time = time.time()
+    def time_spent(self):
+        return time.time() - self.start_time
