@@ -5,9 +5,28 @@ from pathlib import Path
 EXERCISE_FILE = Path(__file__).parent / "exercises.json"
 
 try:
-    from modules.postediting import calculate_edit_distance, calculate_edit_ratio
-except ModuleNotFoundError:
-    calculate_edit_distance = calculate_edit_ratio = None
+  # modules/postediting.py
+from difflib import SequenceMatcher
+
+def calculate_edit_distance(original, student_translation):
+    """Compute a simple edit distance between two strings."""
+    if not original or not student_translation:
+        return 0
+
+    matcher = SequenceMatcher(None, original, student_translation)
+    
+    # Opcodes are tuples: (tag, i1, i2, j1, j2)
+    distance = 0
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag != 'equal':
+            distance += max(i2 - i1, j2 - j1)
+    return distance
+
+def calculate_edit_ratio(original, student_translation):
+    """Compute edit ratio: number of edits / length of original."""
+    distance = calculate_edit_distance(original, student_translation)
+    return distance / max(len(original), 1)  # avoid division by zero
+
 
 def load_exercises():
     if EXERCISE_FILE.exists():
@@ -44,3 +63,4 @@ def student_dashboard():
                 st.write(f"Edit Ratio: {ratio:.2f}")
             else:
                 st.info("Post-edit metrics unavailable (no original text or module missing).")
+
