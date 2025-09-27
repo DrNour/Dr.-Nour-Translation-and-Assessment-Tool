@@ -9,7 +9,7 @@ try:
     from modules.postediting import calculate_edit_distance, calculate_edit_ratio, highlight_errors, PostEditSession
 except ModuleNotFoundError:
     st.warning("Post-edit metrics module not found. Core evaluation may be limited.")
-    calculate_edit_distance = calculate_edit_ratio = highlight_errors = PostEditSession = None
+from modules.postediting import calculate_edit_distance, calculate_edit_ratio, highlight_errors, PostEditSession
 
 try:
     from modules.instructor import instructor_dashboard
@@ -46,3 +46,4 @@ elif user_type == "Student":
 
 # --- Optional Leaderboard ---
 leaderboard()
+
