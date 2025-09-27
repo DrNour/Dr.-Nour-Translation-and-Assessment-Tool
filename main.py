@@ -3,6 +3,31 @@ import time
 
 st.set_page_config(page_title="Nour Translation & Assessment Tool", layout="wide")
 st.title("Nour Translation & Assessment Tool")
+# main.py
+
+try:
+    from modules.postediting import calculate_edit_distance, calculate_edit_ratio, highlight_errors, PostEditSession
+except ModuleNotFoundError:
+    st.warning("Post-edit metrics module not found. Core evaluation may be limited.")
+    calculate_edit_distance = calculate_edit_ratio = highlight_errors = PostEditSession = None
+
+try:
+    from modules.instructor import instructor_dashboard
+except ModuleNotFoundError:
+    st.warning("Instructor interface module not found. Instructor features disabled.")
+    instructor_dashboard = lambda: st.info("Instructor dashboard unavailable.")
+
+try:
+    from modules.student_interface import student_dashboard
+except ModuleNotFoundError:
+    st.warning("Student interface module not found. Student features disabled.")
+    student_dashboard = lambda: st.info("Student dashboard unavailable.")
+
+try:
+    from modules.gamification import leaderboard
+except ModuleNotFoundError:
+    st.warning("Gamification module not found. Leaderboard features disabled.")
+    leaderboard = lambda: None
 
 # --- Modular Imports (Crash-Safe) ---
 try:
@@ -44,4 +69,5 @@ elif user_type == "Student":
 
 # --- Optional Leaderboard ---
 leaderboard()
+
 
