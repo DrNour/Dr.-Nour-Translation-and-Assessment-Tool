@@ -1,5 +1,4 @@
 import streamlit as st
-
 st.set_page_config(page_title="Nour Translation & Assessment Tool", layout="wide")
 st.title("Nour Translation & Assessment Tool")
 
@@ -26,7 +25,7 @@ try:
     from modules.postedit_interface import postedit_dashboard
 except ModuleNotFoundError:
     st.warning("Post-edit interface unavailable.")
-    postedit_dashboard = lambda: st.info("Post-edit dashboard unavailable.")
+    postedit_dashboard = lambda: st.info("Post-edit interface unavailable.")
 
 try:
     from modules.gamification import leaderboard
@@ -35,17 +34,14 @@ except ModuleNotFoundError:
     leaderboard = lambda: None
 
 # --- User Selection ---
-# Make sure this is **always defined** before usage
 user_type = st.radio("Login as:", ["Instructor", "Student"], index=1)
 
 # --- Interface Display ---
 if user_type == "Instructor":
     instructor_dashboard()
 elif user_type == "Student":
-    # Call student interface first
     student_dashboard()
-    # Call post-edit dashboard optionally
-    postedit_dashboard()
+    postedit_dashboard()  # Optional MT post-editing
 
 # --- Optional Leaderboard ---
 leaderboard()
