@@ -1,38 +1,42 @@
-import time
+import streamlit as st
+from modules.postedit_metrics import PostEditSession, calculate_edit_distance, highlight_errors
 
-class PostEditSession:
-    def __init__(self):
-        self.start_time = time.time()
-        self.keystrokes = 0
+# Minimal error type simulation
+def error_types(original, edited):
+    errors = highlight_errors(original, edited)
+    categorized = {"Substitution": [], "Insertion": [], "Deletion": []}
+    for idx,o,e in errors:
+        if e == "":
+            categorized["Deletion"].append((idx,o))
+        elif o == "":
+            categorized["Insertion"].append((idx,e))
+        else:
+            categorized["Substitution"].append((idx,o,e))
+    return categorized
 
-    def record_keystroke(self):
-        self.keystrokes += 1
+def postedit_dashboard(student_name="Student"):
+    st.subheader("Post-edit MT Output")
+    mt_output = st.text_area("Machine-translated text")
+    postedit_session = PostEditSession()
+    edited_text = st.text_area("Edit here")
+    
+    if st.button("Submit Post-edit"):
+        distance = calculate_edit_distance(mt_output, edited_text)
+        st.write(f"Edit distance: {distance}")
+        st.write(f"Time spent: {postedit_session.elapsed_time():.2f}s")
+        st.write(f"Keystrokes: {postedit_session.keystrokes}")
+        
+        # Error type display
+        errors = error_types(mt_output, edited_text)
+        st.write("Error types identified:")
+        for k,v in errors.items():
+            st.write(f"{k}: {v}")
 
-    def elapsed_time(self):
-        return time.time() - self.start_time
-
-def calculate_edit_distance(original, edited):
-    # simple Levenshtein distance
-    import numpy as np
-    dp = np.zeros((len(original)+1, len(edited)+1))
-    for i in range(len(original)+1):
-        dp[i][0] = i
-    for j in range(len(edited)+1):
-        dp[0][j] = j
-    for i in range(1,len(original)+1):
-        for j in range(1,len(edited)+1):
-            if original[i-1] == edited[j-1]:
-                dp[i][j] = dp[i-1][j-1]
-            else:
-                dp[i][j] = 1 + min(dp[i-1][j-1], dp[i-1][j], dp[i][j-1])
-    return dp[len(original)][len(edited)]
-
-def calculate_edit_ratio(original, edited):
-    return calculate_edit_distance(original, edited)/max(len(original), len(edited),1)
-
-def highlight_errors(original, edited):
-    errors = []
-    for i, (o,e) in enumerate(zip(original, edited)):
-        if o != e:
-            errors.append((i,o,e))
-    return errors
+        # Update gamification points
+        from modules.gamification import leaderboard_data
+        points_earned = max(10 - distance, 0)
+        if student_name in leaderboard_data:
+            leaderboard_data[student_name] += points_earned
+        else:
+            leaderboard_data[student_name] = points_earned
+        st.success(f"Points earned: {points_earned}")
