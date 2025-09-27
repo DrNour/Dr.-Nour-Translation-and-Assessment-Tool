@@ -1,3 +1,18 @@
+try:
+    from postediting import run_feature as run_postediting
+except Exception:
+    run_postediting = None
+
+try:
+    from instructor import run_feature as run_instructor
+except Exception:
+    run_instructor = None
+
+try:
+    from student_interface import run_feature as run_student
+except Exception:
+    run_student = None
+
 import streamlit as st
 import pandas as pd
 import sacrebleu
@@ -128,3 +143,4 @@ else:
         st.table(leaderboard)
     else:
         st.info("No leaderboard yet.")
+
