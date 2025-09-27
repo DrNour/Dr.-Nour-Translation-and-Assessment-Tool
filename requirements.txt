@@ -6,3 +6,5 @@ sentencepiece
 torch
 transformers
 bert-score
+python-Levenshtein
+
