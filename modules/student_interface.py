@@ -1,44 +1,31 @@
 import streamlit as st
-from modules.postediting import PostEditSession, calculate_edit_distance, calculate_edit_ratio, highlight_errors
-from modules.instructor import exercises, submissions
-from modules.gamification import award_points
+import time
+
+try:
+    from modules.postediting import calculate_edit_distance, calculate_edit_ratio
+except ModuleNotFoundError:
+    calculate_edit_distance = calculate_edit_ratio = None
 
 def student_dashboard():
-    st.subheader("Student Dashboard")
-    student_name = st.text_input("Your Name")
-    exercise_id = st.selectbox("Select Exercise", list(exercises.keys()) or ["None"])
-    original_text = exercises.get(exercise_id, "")
+    st.header("Student Dashboard")
 
-    if exercise_id != "None":
-        mode = st.radio("Mode", ["Translate from scratch", "Post-edit MT output"])
-        if mode == "Post-edit MT output":
-            mt_output = st.text_area("MT Output", value=original_text[::-1])  # dummy MT output
+    # Input: Original text (can be optional)
+    original_text = st.text_area("Text to Translate (optional)")
+
+    # Input: Student translation
+    student_translation = st.text_area("Your Translation")
+
+    if st.button("Submit Translation"):
+        if not student_translation.strip():
+            st.warning("Please enter a translation before submitting.")
         else:
-            mt_output = ""
+            st.success("Translation submitted successfully!")
 
-        student_translation = st.text_area("Your Translation")
-        session = PostEditSession()
-        session.start()
-
-        if st.button("Submit Translation"):
-            session.end()
-            session.add_keystrokes(len(student_translation))
-            distance = calculate_edit_distance(original_text, student_translation)
-            ratio = calculate_edit_ratio(original_text, student_translation)
-            errors = highlight_errors(original_text, student_translation)
-
-            # Save submission
-            if exercise_id not in submissions:
-                submissions[exercise_id] = {}
-            submissions[exercise_id][student_name] = {
-                "translation": student_translation,
-                "postedit": mt_output,
-                "time": session.time_spent(),
-                "keystrokes": session.keystrokes,
-                "edit_distance": distance,
-                "edit_ratio": ratio,
-                "errors": errors
-            }
-
-            st.success(f"Translation submitted! Edit distance: {distance}, Edit ratio: {ratio}")
-            award_points(student_name, 10)
+            # Post-edit metrics (safe)
+            if calculate_edit_distance and original_text.strip():
+                distance = calculate_edit_distance(original_text, student_translation)
+                ratio = calculate_edit_ratio(original_text, student_translation)
+                st.write(f"Edit Distance: {distance}")
+                st.write(f"Edit Ratio: {ratio:.2f}")
+            else:
+                st.info("Post-edit metrics unavailable (no original text or module missing).")
