@@ -22,3 +22,4 @@ def calculate_edit_ratio(source, target):
 def highlight_errors(source, target):
     diff = list(difflib.ndiff(source.split(), target.split()))
     return [w for w in diff if w.startswith('-') or w.startswith('+')]
+
