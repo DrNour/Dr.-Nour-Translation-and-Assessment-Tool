@@ -10,7 +10,11 @@ try:
 except ModuleNotFoundError:
     st.warning("Post-edit metrics module not found. Core evaluation may be limited.")
     calculate_edit_distance = calculate_edit_ratio = highlight_errors = PostEditSession = None
-
+try:
+    from modules.badges import award_badge
+except ModuleNotFoundError:
+    st.warning("Badges module not found. Badge features disabled.")
+    award_badge = lambda *args, **kwargs: None
 try:
     from modules.instructor_interface import instructor_dashboard
 except ModuleNotFoundError:
@@ -40,3 +44,4 @@ elif user_type == "Student":
 
 # --- Optional Leaderboard ---
 leaderboard()
+
