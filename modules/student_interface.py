@@ -1,18 +1,34 @@
 import streamlit as st
-import time
+import json
+from pathlib import Path
+
+EXERCISE_FILE = Path(__file__).parent / "exercises.json"
 
 try:
     from modules.postediting import calculate_edit_distance, calculate_edit_ratio
 except ModuleNotFoundError:
     calculate_edit_distance = calculate_edit_ratio = None
 
+def load_exercises():
+    if EXERCISE_FILE.exists():
+        with open(EXERCISE_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return []
+
 def student_dashboard():
     st.header("Student Dashboard")
 
-    # Input: Original text (can be optional)
-    original_text = st.text_area("Text to Translate (optional)")
+    exercises = load_exercises()
+    if not exercises:
+        st.info("No exercises available. Please wait for instructor to create some.")
+        return
 
-    # Input: Student translation
+    # Show exercises one by one (or allow selection)
+    exercise = st.selectbox("Select Exercise", exercises, format_func=lambda x: x["text"][:50]+"..." if len(x["text"])>50 else x["text"])
+    original_text = exercise.get("text", "")
+    reference_translation = exercise.get("reference", "")
+
+    # Student translation
     student_translation = st.text_area("Your Translation")
 
     if st.button("Submit Translation"):
@@ -21,7 +37,6 @@ def student_dashboard():
         else:
             st.success("Translation submitted successfully!")
 
-            # Post-edit metrics (safe)
             if calculate_edit_distance and original_text.strip():
                 distance = calculate_edit_distance(original_text, student_translation)
                 ratio = calculate_edit_ratio(original_text, student_translation)
