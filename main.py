@@ -4,81 +4,48 @@ st.set_page_config(page_title="Nour Translation & Assessment Tool", layout="wide
 st.title("Nour Translation & Assessment Tool")
 
 # --- Modular Imports (Crash-Safe) ---
-def safe_import(module_name, fallback):
-    try:
-        return __import__(module_name). __dict__
-    except ModuleNotFoundError:
-        st.warning(f"{module_name} not found. Feature disabled.")
-        return fallback
-
-# Import instructor
 try:
-    from instructor import instructor_dashboard
-except:
+    from modules.postedit_metrics import calculate_edit_distance, calculate_edit_ratio, highlight_errors, PostEditSession
+except ModuleNotFoundError:
+    st.warning("Post-edit metrics module not found. Core evaluation may be limited.")
+    calculate_edit_distance = calculate_edit_ratio = highlight_errors = PostEditSession = None
+
+try:
+    from modules.instructor_interface import instructor_dashboard
+except ModuleNotFoundError:
+    st.warning("Instructor interface module not found. Instructor features disabled.")
     instructor_dashboard = lambda: st.info("Instructor dashboard unavailable.")
 
-# Import student
 try:
-    from student_interface import student_dashboard
-except:
+    from modules.student_interface import student_dashboard
+except ModuleNotFoundError:
+    st.warning("Student interface module not found. Student features disabled.")
     student_dashboard = lambda: st.info("Student dashboard unavailable.")
 
-# Gamification
 try:
-    from gamification import leaderboard
-except:
-    leaderboard = lambda: None
-
-# Postediting
-try:
-    from postediting import calculate_edit_distance, calculate_edit_ratio, highlight_errors, PostEditSession
-except:
-    calculate_edit_distance = calculate_edit_ratio = highlight_errors = PostEditSession = None
-try:
-    from postedit_interface import postedit_dashboard
+    from modules.postedit_interface import postedit_dashboard
 except ModuleNotFoundError:
     st.warning("Post-edit interface unavailable.")
     postedit_dashboard = lambda: st.info("Post-edit dashboard unavailable.")
 
-# In Student Interface section
-if user_type == "Student":
-    postedit_dashboard()
-
-
-# Error analysis
 try:
-    from error_analysis import analyze_errors
-except:
-    analyze_errors = lambda s, t: []
-
-# Time tracking
-try:
-    from time_tracking import track_session
-except:
-    track_session = lambda: None
-
-# Suggestions
-try:
-    from suggestions import suggest_exercises
-except:
-    suggest_exercises = lambda history: []
-
-# Badges
-try:
-    from badges import award_badges
-except:
-    award_badges = lambda score: []
+    from modules.gamification import leaderboard
+except ModuleNotFoundError:
+    st.warning("Gamification module not found. Leaderboard features disabled.")
+    leaderboard = lambda: None
 
 # --- User Selection ---
+# Make sure this is **always defined** before usage
 user_type = st.radio("Login as:", ["Instructor", "Student"], index=1)
 
 # --- Interface Display ---
 if user_type == "Instructor":
     instructor_dashboard()
 elif user_type == "Student":
+    # Call student interface first
     student_dashboard()
+    # Call post-edit dashboard optionally
+    postedit_dashboard()
 
 # --- Optional Leaderboard ---
 leaderboard()
-
-
