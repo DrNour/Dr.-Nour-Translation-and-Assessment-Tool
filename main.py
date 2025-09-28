@@ -25,12 +25,6 @@ except ModuleNotFoundError:
     student_dashboard = lambda: st.info("Student dashboard unavailable.")
 
 try:
-    from modules.gamification import leaderboard
-except ModuleNotFoundError:
-    st.warning("Gamification module not found. Leaderboard features disabled.")
-    leaderboard = lambda: None
-
-try:
     from modules.badges import award_badge
 except ModuleNotFoundError:
     st.warning("Badges module not found. Badge features disabled.")
@@ -66,3 +60,4 @@ elif user_type == "Student":
 
 # --- Optional Leaderboard ---
 leaderboard()
+
