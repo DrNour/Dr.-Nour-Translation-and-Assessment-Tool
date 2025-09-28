@@ -4,37 +4,49 @@ from modules.postediting import PostEditSession
 def student_dashboard(EXERCISES):
     st.header("Student Dashboard")
 
+    # --- Initialize session_state keys safely ---
+    if "editing" not in st.session_state:
+        st.session_state.editing = False
+    if "current_session" not in st.session_state:
+        st.session_state.current_session = None
+    if "submissions" not in st.session_state:
+        st.session_state.submissions = []
+
+    # --- Student name input ---
     student_name = st.text_input("Enter your name")
 
+    # --- Exercise selection ---
     exercise_options = [f"{ex['id']}: {ex['text'][:50]}..." for ex in EXERCISES]
     selected = st.selectbox("Select an exercise", exercise_options)
 
-    # Map selection to exercise
     exercise_index = exercise_options.index(selected)
     exercise = EXERCISES[exercise_index]
 
-    if st.button("Start Editing"):
+    # --- Start editing ---
+    if st.button("Start Editing") and not st.session_state.editing:
         if not student_name.strip():
-            st.error("Please enter your name!")
-            return
+            st.warning("Please enter your name before starting.")
+        else:
+            session = PostEditSession(exercise['text'], student_name, exercise['id'])
+            session.start_edit()
+            st.session_state.current_session = session
+            st.session_state.editing = True
 
-        session = PostEditSession(exercise['text'], student_name, exercise['id'])
-        session.start_edit()
-        st.session_state.current_session = session
-        st.session_state.editing = True
-        st.experimental_rerun()
-
-    if st.session_state.get("editing"):
+    # --- Editing area ---
+    if st.session_state.editing and st.session_state.current_session:
         session: PostEditSession = st.session_state.current_session
-        edited_text = st.text_area("Edit Text", session.original_text, key="edit_box")
+        edited_text = st.text_area(
+            "Edit Text", 
+            value=session.original_text, 
+            key=f"edit_box_{session.exercise_id}"
+        )
 
+        # --- Finish editing ---
         if st.button("Finish Editing"):
             session.finish_edit(edited_text)
             st.success(f"Submission saved! Metrics: {session.metrics}")
 
             # Save submission
-            if "submissions" not in st.session_state:
-                st.session_state.submissions = []
             st.session_state.submissions.append({
                 "SubmissionID": session.id,
                 "ExerciseID": session.exercise_id,
@@ -44,7 +56,6 @@ def student_dashboard(EXERCISES):
                 **session.metrics
             })
 
-            # Clear current session
+            # Reset editing session
             st.session_state.editing = False
-            del st.session_state.current_session
-            st.experimental_rerun()
+            st.session_state.current_session = None
