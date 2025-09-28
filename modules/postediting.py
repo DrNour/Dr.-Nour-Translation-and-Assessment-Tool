@@ -1,29 +1,40 @@
 # modules/postediting.py
-import time
 from difflib import SequenceMatcher
 
-class PostEditSession:
-    def __init__(self, original_text):
-        self.original_text = original_text
-        self.start_time = time.time()
-        self.end_time = None
-
-    def finish(self):
-        self.end_time = time.time()
-        return self.time_spent()
-
-    def time_spent(self):
-        if self.end_time:
-            return self.end_time - self.start_time
-        return time.time() - self.start_time
-
 def calculate_edit_distance(original, student_translation):
+    """Compute simple edit distance between two strings."""
     if not original or not student_translation:
         return 0
     matcher = SequenceMatcher(None, original, student_translation)
-    distance = sum(max(i2 - i1, j2 - j1) for tag, i1, i2, j1, j2 in matcher.get_opcodes() if tag != 'equal')
+    distance = 0
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag != "equal":
+            distance += max(i2 - i1, j2 - j1)
     return distance
 
 def calculate_edit_ratio(original, student_translation):
+    """Compute ratio of edits to original text length."""
     distance = calculate_edit_distance(original, student_translation)
-    return distance / max(len(original), 1)
+    return distance / max(len(original), 1)  # avoid division by zero
+
+def highlight_errors(original, student_translation):
+    """Return a simple list of differences for highlighting."""
+    matcher = SequenceMatcher(None, original, student_translation)
+    errors = []
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag != "equal":
+            errors.append({
+                "type": tag,
+                "original": original[i1:i2],
+                "student": student_translation[j1:j2]
+            })
+    return errors
+
+class PostEditSession:
+    """Optional class to track post-edit session metrics."""
+    def __init__(self, original, student_translation):
+        self.original = original
+        self.student_translation = student_translation
+        self.edit_distance = calculate_edit_distance(original, student_translation)
+        self.edit_ratio = calculate_edit_ratio(original, student_translation)
+        self.errors = highlight_errors(original, student_translation)
