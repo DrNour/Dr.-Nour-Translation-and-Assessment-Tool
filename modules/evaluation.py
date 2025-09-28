@@ -1,19 +1,31 @@
 # modules/evaluation.py
-from nltk.translate.bleu_score import sentence_bleu
-from sacrebleu import corpus_chrf
-try:
-    from bert_score import score as bert_score
-except ModuleNotFoundError:
-    bert_score = None
 
-def bleu_metric(reference, candidate):
-    return sentence_bleu([reference.split()], candidate.split())
+def evaluate_translation(source_text, student_translation):
+    """
+    Stub function to calculate fluency and accuracy.
+    Replace this with your actual scoring logic.
+    
+    Returns:
+        fluency (float): Fluency score between 0 and 1
+        accuracy (float): Accuracy score between 0 and 1
+    """
+    # --- Example simple scoring logic ---
+    # Fluency: fraction of words that are "well-formed"
+    source_words = source_text.split()
+    student_words = student_translation.split()
 
-def chrf_metric(reference, candidate):
-    return corpus_chrf([candidate], [[reference]]).score
+    # Prevent division by zero
+    if len(student_words) == 0:
+        fluency = 0.0
+    else:
+        fluency = min(1.0, len(student_words)/len(source_words))
 
-def bert_metric(reference, candidate):
-    if not bert_score:
-        return None
-    P, R, F1 = bert_score([candidate], [reference], lang="en")
-    return float(F1[0])
+    # Accuracy: fraction of words matching source words (very basic)
+    common_words = sum(1 for w in student_words if w in source_words)
+    accuracy = min(1.0, common_words / max(len(source_words),1))
+
+    # Round scores to 2 decimals
+    fluency = round(fluency, 2)
+    accuracy = round(accuracy, 2)
+
+    return fluency, accuracy
