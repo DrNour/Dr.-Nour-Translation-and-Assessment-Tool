@@ -1,8 +1,10 @@
 import streamlit as st
 import pandas as pd
 
-def instructor_interface(exercises, submissions):
+def instructor_dashboard():
     st.header("Instructor Dashboard")
+    st.info("Here you can create exercises, download submissions, and view metrics.")
+
 
     # ---------- Create Exercise ----------
     with st.form("create_exercise_form"):
@@ -65,6 +67,7 @@ def instructor_interface(exercises, submissions):
                 file_name="submissions.csv",
                 mime="text/csv",
             )
+
 
 
 
