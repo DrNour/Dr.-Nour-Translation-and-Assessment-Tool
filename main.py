@@ -14,4 +14,4 @@ tab = st.sidebar.selectbox("Select Dashboard", ["Student", "Instructor"])
 if tab == "Student":
     student_dashboard(EXERCISES)
 else:
-    instructor_dashboard()
+    instructor_dashboard(EXERCISES)   # <-- pass EXERCISES
