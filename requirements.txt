@@ -7,4 +7,7 @@ torch
 transformers
 bert-score
 python-Levenshtein
+sacrebleu>=2.3.1
+bert-score>=0.3.13
+
 
