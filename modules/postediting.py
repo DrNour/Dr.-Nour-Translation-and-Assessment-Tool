@@ -1,40 +1,37 @@
-# modules/postediting.py
-from difflib import SequenceMatcher
-
-def calculate_edit_distance(original, student_translation):
-    """Compute simple edit distance between two strings."""
-    if not original or not student_translation:
-        return 0
-    matcher = SequenceMatcher(None, original, student_translation)
-    distance = 0
-    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
-        if tag != "equal":
-            distance += max(i2 - i1, j2 - j1)
-    return distance
-
-def calculate_edit_ratio(original, student_translation):
-    """Compute ratio of edits to original text length."""
-    distance = calculate_edit_distance(original, student_translation)
-    return distance / max(len(original), 1)  # avoid division by zero
-
-def highlight_errors(original, student_translation):
-    """Return a simple list of differences for highlighting."""
-    matcher = SequenceMatcher(None, original, student_translation)
-    errors = []
-    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
-        if tag != "equal":
-            errors.append({
-                "type": tag,
-                "original": original[i1:i2],
-                "student": student_translation[j1:j2]
-            })
-    return errors
+import time
+import uuid
 
 class PostEditSession:
-    """Optional class to track post-edit session metrics."""
-    def __init__(self, original, student_translation):
-        self.original = original
-        self.student_translation = student_translation
-        self.edit_distance = calculate_edit_distance(original, student_translation)
-        self.edit_ratio = calculate_edit_ratio(original, student_translation)
-        self.errors = highlight_errors(original, student_translation)
+    def __init__(self, exercise_text, student_name, exercise_id):
+        self.id = str(uuid.uuid4())
+        self.exercise_id = exercise_id
+        self.student_name = student_name
+        self.original_text = exercise_text
+        self.edited_text = ""
+        self.start_time = None
+        self.end_time = None
+        self.keystrokes = 0
+        self.metrics = {
+            "accuracy": None,
+            "fluency": None,
+            "edit_distance": None,
+            "time_spent_sec": None,
+            "keystrokes": None
+        }
+
+    def start_edit(self):
+        self.start_time = time.time()
+
+    def finish_edit(self, edited_text):
+        self.end_time = time.time()
+        self.edited_text = edited_text
+        self.keystrokes = len(edited_text)
+        self.evaluate()
+
+    def evaluate(self):
+        self.metrics["accuracy"] = len(self.edited_text) / max(len(self.original_text), 1)
+        self.metrics["fluency"] = len(set(self.edited_text.split())) / max(len(self.edited_text.split()), 1) if self.edited_text else 0
+        self.metrics["edit_distance"] = abs(len(self.original_text) - len(self.edited_text))
+        self.metrics["time_spent_sec"] = round(self.end_time - self.start_time, 2) if self.start_time and self.end_time else 0
+        self.metrics["keystrokes"] = self.keystrokes
+        return self.metrics
