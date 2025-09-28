@@ -26,6 +26,64 @@ def student_dashboard():
         st.info("No exercises available. Please wait for instructor to create some.")
         return
 
+    from modules.postediting import calculate_edit_distance, calculate_edit_ratio, highlight_errors
+
+def student_interface(exercises, submissions):
+    st.header("Student Dashboard")
+
+    # Student name
+    student_name = st.text_input("Enter your name")
+    if not student_name:
+        st.warning("Please enter your name to continue.")
+        return
+
+    # Pick exercise
+    if not exercises:
+        st.info("No exercises available yet.")
+        return
+
+    exercise_id = st.selectbox("Select Exercise", list(exercises.keys()))
+    exercise = exercises[exercise_id]
+
+    st.write("**Source Text:**")
+    st.write(exercise["source"])
+
+    # Student translation
+    student_translation = st.text_area("Your Translation")
+
+    # Timer (for time spent)
+    import time
+    if "start_time" not in st.session_state:
+        st.session_state["start_time"] = time.time()
+
+    if st.button("Submit Translation"):
+        if not student_translation.strip():
+            st.warning("Please enter a translation before submitting.")
+        else:
+            elapsed_time = int(time.time() - st.session_state["start_time"])
+
+            # Metrics
+            distance = calculate_edit_distance(exercise["reference"], student_translation)
+            ratio = calculate_edit_ratio(exercise["reference"], student_translation)
+            st.write(f"**Edit Distance:** {distance}")
+            st.write(f"**Edit Ratio:** {ratio:.2f}")
+
+            # Error highlighting
+            st.markdown("**Error Analysis:**")
+            st.write(highlight_errors(exercise["reference"], student_translation), unsafe_allow_html=True)
+
+            # Save submission
+            if exercise_id not in submissions:
+                submissions[exercise_id] = {}
+            submissions[exercise_id][student_name] = {
+                "translation": student_translation,
+                "postedit": "",
+                "time": elapsed_time,
+            }
+
+            st.success("✅ Translation submitted successfully!")
+
+
     exercise = st.selectbox(
         "Select Exercise",
         exercises,
@@ -72,3 +130,4 @@ def student_dashboard():
 
     st.subheader("Leaderboard")
     show_leaderboard()
+
