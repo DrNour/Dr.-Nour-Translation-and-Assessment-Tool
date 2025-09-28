@@ -1,31 +1,52 @@
-# modules/evaluation.py
+import string
+
+def simple_accuracy(source_text, student_translation, synonyms=None):
+    """
+    Computes a rough accuracy score (0-1) by comparing words, allowing simple synonyms.
+    synonyms: dict, e.g., {'car': ['automobile'], 'house':['home']}
+    """
+    if synonyms is None:
+        synonyms = {}
+
+    # Normalize text: lowercase and remove punctuation
+    def normalize(text):
+        return [w.strip(string.punctuation).lower() for w in text.split()]
+
+    source_words = normalize(source_text)
+    student_words = normalize(student_translation)
+
+    matches = 0
+    for w in student_words:
+        if w in source_words:
+            matches += 1
+        else:
+            # Check synonyms
+            for key, syns in synonyms.items():
+                if w in syns and key in source_words:
+                    matches += 1
+                    break
+
+    if len(source_words) == 0:
+        return 0.0
+    return round(matches / len(source_words), 2)
+
 
 def evaluate_translation(source_text, student_translation):
     """
-    Stub function to calculate fluency and accuracy.
-    Replace this with your actual scoring logic.
-    
-    Returns:
-        fluency (float): Fluency score between 0 and 1
-        accuracy (float): Accuracy score between 0 and 1
+    Evaluates fluency and accuracy of a student translation.
+    Returns scores between 0 and 1.
     """
-    # --- Example simple scoring logic ---
-    # Fluency: fraction of words that are "well-formed"
-    source_words = source_text.split()
-    student_words = student_translation.split()
+    # Fluency: length-based approximation
+    fluency = min(1.0, len(student_translation.split()) / max(len(source_text.split()),1))
 
-    # Prevent division by zero
-    if len(student_words) == 0:
-        fluency = 0.0
-    else:
-        fluency = min(1.0, len(student_words)/len(source_words))
+    # Accuracy: using simple word overlap + synonyms
+    # Example synonym dictionary (expand as needed)
+    synonyms = {
+        "quick": ["fast"],
+        "car": ["automobile"],
+        "house": ["home"],
+        "child": ["kid"]
+    }
+    accuracy = simple_accuracy(source_text, student_translation, synonyms)
 
-    # Accuracy: fraction of words matching source words (very basic)
-    common_words = sum(1 for w in student_words if w in source_words)
-    accuracy = min(1.0, common_words / max(len(source_words),1))
-
-    # Round scores to 2 decimals
-    fluency = round(fluency, 2)
-    accuracy = round(accuracy, 2)
-
-    return fluency, accuracy
+    return round(fluency,2), round(accuracy,2)
