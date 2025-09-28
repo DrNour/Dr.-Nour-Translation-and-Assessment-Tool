@@ -3,7 +3,7 @@ import uuid
 
 class PostEditSession:
     def __init__(self, exercise_text, student_name, exercise_id):
-        self.id = str(uuid.uuid4())
+        self.id = str(uuid.uuid4())  # unique submission ID
         self.exercise_id = exercise_id
         self.student_name = student_name
         self.original_text = exercise_text
