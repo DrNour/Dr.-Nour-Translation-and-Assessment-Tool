@@ -1,7 +1,8 @@
 import streamlit as st
 import time
-from modules.evaluation import evaluate_translation  # your fluency/accuracy metrics
+from modules.evaluation import evaluate_translation  # your fluency/accuracy function
 
+# Initialize storage
 if "translations" not in st.session_state:
     st.session_state["translations"] = []
 if "start_time" not in st.session_state:
@@ -10,6 +11,7 @@ if "start_time" not in st.session_state:
 def student_dashboard():
     st.title("Student Dashboard")
 
+    # Check assigned exercises
     if "exercises" not in st.session_state or not any(ex["assigned"] for ex in st.session_state["exercises"]):
         st.warning("⚠️ No exercises assigned yet.")
         return
@@ -22,6 +24,7 @@ def student_dashboard():
         st.markdown("**Source Text (ST):**")
         st.info(source_text)
 
+        # Start timing for this exercise
         if exercise_id not in st.session_state["start_time"]:
             st.session_state["start_time"][exercise_id] = time.time()
 
@@ -29,6 +32,7 @@ def student_dashboard():
         existing = next((t for t in st.session_state["translations"]
                          if t["exercise_id"] == exercise_id), None)
 
+        # Translation input area
         student_translation = st.text_area(
             "Your Translation:",
             value=existing["translation"] if existing else "",
@@ -36,6 +40,7 @@ def student_dashboard():
             key=f"trans_{exercise_id}"
         )
 
+        # Save / update translation
         if st.button("Save Translation", key=f"save_{exercise_id}"):
             if student_translation.strip():
                 duration = time.time() - st.session_state["start_time"][exercise_id]
@@ -58,11 +63,24 @@ def student_dashboard():
                         "accuracy": accuracy
                     })
 
-                st.success("✅ Translation saved with assessment!")
+                st.success("✅ Translation saved with metrics!")
 
+        # Comparison view
+        if student_translation.strip():
+            st.subheader("Comparison View")
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("**Source Text**")
+                st.write(source_text)
+            with col2:
+                st.markdown("**Your Translation**")
+                st.write(student_translation)
+
+        # Show previous submissions for this exercise
         if existing:
-            st.markdown(f"**Fluency Score:** {existing['fluency']}")
-            st.markdown(f"**Accuracy Score:** {existing['accuracy']}")
-            st.markdown(f"⏱ Time Spent: {existing['time_spent_sec']} sec")
-            st.markdown(f"⌨️ Keystrokes: {existing['keystrokes']}")
+            st.subheader("📊 Previous Submission Metrics")
+            st.markdown(f"- **Fluency:** {existing['fluency']}")
+            st.markdown(f"- **Accuracy:** {existing['accuracy']}")
+            st.markdown(f"- **Time Spent:** {existing['time_spent_sec']} sec")
+            st.markdown(f"- **Keystrokes:** {existing['keystrokes']}")
             st.markdown("---")
