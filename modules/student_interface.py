@@ -11,6 +11,26 @@ if "start_time" not in st.session_state:
 def student_dashboard():
     st.title("Student Dashboard")
 
+    # Initialize dictionaries safely
+    if "translations" not in st.session_state:
+        st.session_state["translations"] = []
+    if "start_time" not in st.session_state:
+        st.session_state["start_time"] = {}
+
+    # Example: assigned exercises
+    if "exercises" not in st.session_state or not any(ex["assigned"] for ex in st.session_state["exercises"]):
+        st.warning("⚠️ No exercises assigned yet.")
+        return
+
+    for ex in [e for e in st.session_state["exercises"] if e["assigned"]]:
+        exercise_id = ex["id"]
+        source_text = ex["source_text"]
+
+        # --- Initialize start time for this exercise if missing ---
+        if exercise_id not in st.session_state["start_time"]:
+            st.session_state["start_time"][exercise_id] = time.time()
+
+
     # Check assigned exercises
     if "exercises" not in st.session_state or not any(ex["assigned"] for ex in st.session_state["exercises"]):
         st.warning("⚠️ No exercises assigned yet.")
@@ -84,3 +104,4 @@ def student_dashboard():
             st.markdown(f"- **Time Spent:** {existing['time_spent_sec']} sec")
             st.markdown(f"- **Keystrokes:** {existing['keystrokes']}")
             st.markdown("---")
+
