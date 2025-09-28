@@ -1,23 +1,19 @@
-import nltk
-from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
-import Levenshtein as lev
+# modules/evaluation.py
+from nltk.translate.bleu_score import sentence_bleu
+from sacrebleu import corpus_chrf
+try:
+    from bert_score import score as bert_score
+except ModuleNotFoundError:
+    bert_score = None
 
-# Make sure NLTK tokenizer data is ready
-nltk.download('punkt', quiet=True)
+def bleu_metric(reference, candidate):
+    return sentence_bleu([reference.split()], candidate.split())
 
-def evaluate_translation(hypothesis, reference):
-    scores = {}
-    ref_tokens = reference.split()
-    hyp_tokens = hypothesis.split()
+def chrf_metric(reference, candidate):
+    return corpus_chrf([candidate], [[reference]]).score
 
-    # BLEU
-    smoothie = SmoothingFunction().method4
-    bleu = sentence_bleu([ref_tokens], hyp_tokens, smoothing_function=smoothie)
-    scores["BLEU"] = round(bleu, 4)
-
-    # Edit Distance
-    edit_dist = lev.distance(reference, hypothesis)
-    scores["Edit Distance"] = edit_dist
-    scores["WER"] = round(edit_dist / max(1, len(reference.split())), 4)
-
-    return scores
+def bert_metric(reference, candidate):
+    if not bert_score:
+        return None
+    P, R, F1 = bert_score([candidate], [reference], lang="en")
+    return float(F1[0])
