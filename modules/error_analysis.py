@@ -1,9 +1,9 @@
-def analyze_errors(source, target):
+# modules/error_analysis.py
+def categorize_errors(original, candidate):
     errors = []
-    if not target:
-        errors.append("Empty translation")
-    if source.split()[:2] == target.split()[:2]:
-        errors.append("Literal translation detected")
-    if len(target.split()) < len(source.split()) * 0.5:
-        errors.append("Possible omission")
+    if original != candidate:
+        if len(original.split()) != len(candidate.split()):
+            errors.append("Length mismatch")
+        if any(c.isupper() for c in candidate) and not any(o.isupper() for o in original):
+            errors.append("Capitalization error")
     return errors
