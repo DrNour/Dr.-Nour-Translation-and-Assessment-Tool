@@ -1,1 +1,5 @@
-[]
+[
+    {"id": "EX001", "text": "This is the first exercise text."},
+    {"id": "EX002", "text": "Here is the second exercise for editing."},
+    {"id": "EX003", "text": "Finally, the third exercise is here."}
+]
