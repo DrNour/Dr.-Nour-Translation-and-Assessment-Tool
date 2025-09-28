@@ -1,83 +1,68 @@
 import streamlit as st
 import time
+from modules.evaluation import evaluate_translation  # your fluency/accuracy metrics
 
-# Initialize storage
 if "translations" not in st.session_state:
     st.session_state["translations"] = []
 if "start_time" not in st.session_state:
     st.session_state["start_time"] = {}
 
-def student_dashboard(exercise_id=1, source_text=None):
-    st.title(f"Student Dashboard - Exercise {exercise_id}")
+def student_dashboard():
+    st.title("Student Dashboard")
 
-    # Default example text if none is passed
-    if source_text is None:
-        source_text = """Eight short texts (ranging from 200 to 300 words) 
-        were chosen from opinion columns, news articles, and literary excerpts. 
-        These texts were pre-tested for readability and lexical difficulty 
-        to ensure they were comparable across tasks."""
+    if "exercises" not in st.session_state or not any(ex["assigned"] for ex in st.session_state["exercises"]):
+        st.warning("⚠️ No exercises assigned yet.")
+        return
 
-    # Start timing for this exercise
-    if exercise_id not in st.session_state["start_time"]:
-        st.session_state["start_time"][exercise_id] = time.time()
+    for ex in [e for e in st.session_state["exercises"] if e["assigned"]]:
+        exercise_id = ex["id"]
+        source_text = ex["source_text"]
 
-    # Display source text
-    st.subheader("Source Text (ST)")
-    st.write(source_text)
+        st.subheader(f"Exercise {exercise_id}")
+        st.markdown("**Source Text (ST):**")
+        st.info(source_text)
 
-    # Check if student already submitted something
-    existing = next((t for t in st.session_state["translations"]
-                     if t["exercise_id"] == exercise_id), None)
+        if exercise_id not in st.session_state["start_time"]:
+            st.session_state["start_time"][exercise_id] = time.time()
 
-    # Input area for translation
-    st.subheader("Your Translation")
-    student_translation = st.text_area(
-        "Write your translation here:",
-        value=existing["translation"] if existing else "",
-        height=200
-    )
+        # Check if student already submitted
+        existing = next((t for t in st.session_state["translations"]
+                         if t["exercise_id"] == exercise_id), None)
 
-    # Save / update button
-    if st.button("Save Translation"):
-        if student_translation.strip():
-            duration = time.time() - st.session_state["start_time"][exercise_id]
-            keystrokes = len(student_translation)
+        student_translation = st.text_area(
+            "Your Translation:",
+            value=existing["translation"] if existing else "",
+            height=150,
+            key=f"trans_{exercise_id}"
+        )
 
-            if existing:
-                existing["translation"] = student_translation
-                existing["time_spent_sec"] = round(duration, 2)
-                existing["keystrokes"] = keystrokes
-            else:
-                st.session_state["translations"].append({
-                    "exercise_id": exercise_id,
-                    "source_text": source_text,
-                    "translation": student_translation,
-                    "time_spent_sec": round(duration, 2),
-                    "keystrokes": keystrokes
-                })
+        if st.button("Save Translation", key=f"save_{exercise_id}"):
+            if student_translation.strip():
+                duration = time.time() - st.session_state["start_time"][exercise_id]
+                fluency, accuracy = evaluate_translation(source_text, student_translation)
 
-            st.success("✅ Your translation has been saved!")
+                if existing:
+                    existing["translation"] = student_translation
+                    existing["time_spent_sec"] = round(duration, 2)
+                    existing["keystrokes"] = len(student_translation)
+                    existing["fluency"] = fluency
+                    existing["accuracy"] = accuracy
+                else:
+                    st.session_state["translations"].append({
+                        "exercise_id": exercise_id,
+                        "source_text": source_text,
+                        "translation": student_translation,
+                        "time_spent_sec": round(duration, 2),
+                        "keystrokes": len(student_translation),
+                        "fluency": fluency,
+                        "accuracy": accuracy
+                    })
 
-    # Comparison view
-    if student_translation.strip():
-        st.subheader("Comparison View")
-        col1, col2 = st.columns(2)
+                st.success("✅ Translation saved with assessment!")
 
-        with col1:
-            st.markdown("**Source Text**")
-            st.write(source_text)
-
-        with col2:
-            st.markdown("**Your Translation**")
-            st.write(student_translation)
-
-    # Show all saved submissions
-    if st.session_state["translations"]:
-        st.subheader("📂 Your Saved Translations")
-        for entry in st.session_state["translations"]:
-            with st.expander(f"Exercise {entry['exercise_id']} - View Translation"):
-                st.markdown(f"**Source Text:** {entry['source_text']}")
-                st.markdown(f"**Your Translation:** {entry['translation']}")
-                if "time_spent_sec" in entry:
-                    st.markdown(f"⏱ Time Spent: {entry['time_spent_sec']} sec")
-                    st.markdown(f"⌨️ Keystrokes: {entry['keystrokes']}")
+        if existing:
+            st.markdown(f"**Fluency Score:** {existing['fluency']}")
+            st.markdown(f"**Accuracy Score:** {existing['accuracy']}")
+            st.markdown(f"⏱ Time Spent: {existing['time_spent_sec']} sec")
+            st.markdown(f"⌨️ Keystrokes: {existing['keystrokes']}")
+            st.markdown("---")
