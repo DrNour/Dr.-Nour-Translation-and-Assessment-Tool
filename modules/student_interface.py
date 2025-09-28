@@ -1,78 +1,50 @@
-# modules/student_interface.py
 import streamlit as st
-import json
-from pathlib import Path
+from modules.postediting import PostEditSession
 
-EXERCISE_FILE = Path(__file__).parent / "exercises.json"
-
-try:
-    from modules.postediting import calculate_edit_distance, calculate_edit_ratio, PostEditSession
-except ModuleNotFoundError:
-    calculate_edit_distance = calculate_edit_ratio = PostEditSession = None
-
-try:
-    import sacrebleu
-except ModuleNotFoundError:
-    sacrebleu = None
-
-try:
-    from bert_score import score as bert_score
-except ModuleNotFoundError:
-    bert_score = None
-
-def load_exercises():
-    if EXERCISE_FILE.exists():
-        with open(EXERCISE_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return []
-
-def student_dashboard():
+def student_dashboard(EXERCISES):
     st.header("Student Dashboard")
 
-    exercises = load_exercises()
-    if not exercises:
-        st.info("No exercises available. Please wait for instructor to create some.")
-        return
+    student_name = st.text_input("Enter your name")
 
-    exercise = st.selectbox(
-        "Select Exercise",
-        exercises,
-        format_func=lambda x: x["text"][:50] + "..." if len(x["text"]) > 50 else x["text"]
-    )
-    original_text = exercise.get("text", "")
-    reference_translation = exercise.get("reference", "")
+    exercise_options = [f"{ex['id']}: {ex['text'][:50]}..." for ex in EXERCISES]
+    selected = st.selectbox("Select an exercise", exercise_options)
 
-    session = PostEditSession(original_text) if PostEditSession else None
+    # Map selection to exercise
+    exercise_index = exercise_options.index(selected)
+    exercise = EXERCISES[exercise_index]
 
-    student_translation = st.text_area("Your Translation")
-
-    if st.button("Submit Translation"):
-        if not student_translation.strip():
-            st.warning("Please enter a translation before submitting.")
+    if st.button("Start Editing"):
+        if not student_name.strip():
+            st.error("Please enter your name!")
             return
 
-        st.success("Translation submitted successfully!")
+        session = PostEditSession(exercise['text'], student_name, exercise['id'])
+        session.start_edit()
+        st.session_state.current_session = session
+        st.session_state.editing = True
+        st.experimental_rerun()
 
-        # Time spent
-        if session:
-            time_sec = session.finish()
-            st.write(f"Time spent: {time_sec:.2f} seconds")
+    if st.session_state.get("editing"):
+        session: PostEditSession = st.session_state.current_session
+        edited_text = st.text_area("Edit Text", session.original_text, key="edit_box")
 
-        # Post-edit metrics
-        if calculate_edit_distance:
-            distance = calculate_edit_distance(original_text, student_translation)
-            ratio = calculate_edit_ratio(original_text, student_translation)
-            st.write(f"Edit Distance: {distance}")
-            st.write(f"Edit Ratio: {ratio:.2f}")
+        if st.button("Finish Editing"):
+            session.finish_edit(edited_text)
+            st.success(f"Submission saved! Metrics: {session.metrics}")
 
-        # BLEU and chrF
-        if sacrebleu and reference_translation:
-            bleu = sacrebleu.corpus_bleu([student_translation], [[reference_translation]])
-            chrf = sacrebleu.corpus_chrf([student_translation], [[reference_translation]])
-            st.write(f"BLEU: {bleu.score:.2f}")
-            st.write(f"chrF: {chrf.score:.2f}")
+            # Save submission
+            if "submissions" not in st.session_state:
+                st.session_state.submissions = []
+            st.session_state.submissions.append({
+                "SubmissionID": session.id,
+                "ExerciseID": session.exercise_id,
+                "Student": session.student_name,
+                "Original": session.original_text,
+                "Edited": session.edited_text,
+                **session.metrics
+            })
 
-        # BERTScore
-        if bert_score and reference_translation:
-            P, R, F1 = bert_score([student_translation], [reference_translation], lang="en", rescale_with_baseline=True)
-            st.write(f"BERTScore F1: {F1.mean().item():.2f}")
+            # Clear current session
+            st.session_state.editing = False
+            del st.session_state.current_session
+            st.experimental_rerun()
