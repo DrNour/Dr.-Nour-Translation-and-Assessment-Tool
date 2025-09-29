@@ -1,11 +1,11 @@
 import streamlit as st
 import uuid
-from utils.storage import load_assignments, save_assignments, load_submissions
+from modules.storage import load_assignments, save_assignments, load_submissions
 
 def instructor_dashboard():
     st.title("📘 Instructor Dashboard")
 
-    # ---- Create New Assignment ----
+    # ---- Create Assignment ----
     st.subheader("Create New Assignment")
     title = st.text_input("Assignment Title")
     text = st.text_area("Assignment Text")
