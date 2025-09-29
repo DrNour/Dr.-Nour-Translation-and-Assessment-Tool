@@ -9,7 +9,7 @@ ASSIGNMENTS_FILE = os.path.join(DATA_DIR, "assignments.json")
 SUBMISSIONS_FILE = os.path.join(DATA_DIR, "submissions.json")
 
 # ------------------------------
-# Helper functions for JSON I/O
+# Helper functions
 # ------------------------------
 def load_json(file_path):
     if not os.path.exists(file_path):
@@ -22,7 +22,7 @@ def save_json(file_path, data):
         json.dump(data, f, indent=4, ensure_ascii=False)
 
 # ------------------------------
-# Assignments functions
+# Assignments
 # ------------------------------
 def load_assignments():
     return load_json(ASSIGNMENTS_FILE)
@@ -31,7 +31,7 @@ def save_assignments(assignments):
     save_json(ASSIGNMENTS_FILE, assignments)
 
 # ------------------------------
-# Submissions functions
+# Submissions
 # ------------------------------
 def load_submissions():
     return load_json(SUBMISSIONS_FILE)
