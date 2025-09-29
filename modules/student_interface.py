@@ -1,5 +1,5 @@
 import streamlit as st
-from modules.storage import load_assignments, load_submissions, save_submissions
+import storage
 
 def student_dashboard():
     st.title("🎓 Student Dashboard")
@@ -11,8 +11,8 @@ def student_dashboard():
         st.warning("Please enter your name to continue.")
         return
 
-    assignments = load_assignments()
-    submissions = load_submissions()
+    assignments = storage.load_assignments()
+    submissions = storage.load_submissions()
 
     if not assignments:
         st.info("No assignments available yet.")
@@ -27,7 +27,7 @@ def student_dashboard():
             translation = st.text_area(f"Your Answer for {a['title']}", key=a_id)
 
             if st.button(f"Submit {a['title']}", key=f"btn_{a_id}"):
-                save_submissions(
+                storage.save_submissions(
                     assignment_title=a["title"],
                     translation=translation,
                     student_name=student_name,
