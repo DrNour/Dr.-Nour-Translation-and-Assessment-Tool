@@ -98,7 +98,12 @@ if choice == "Student":
                 if a.get("group", "all") in [student_group, "all"]:
                     st.subheader(a["title"])
                     st.write("📖 Instructions:", a.get("instructions", ""))
-                    st.write("✍️ Exercise:", a.get("text", ""))
+                    st.write("✍️ Source Text (ST):", a.get("text", ""))
+
+                    # Example: MT output placeholder
+                    mt_suggestion = f"[MT suggestion for '{a.get('text','')[:50]}...']"
+                    st.write("💡 Machine Translation (MT) Suggestion:")
+                    st.info(mt_suggestion)
 
                     prev_translation = None
                     for s in submissions.values():
@@ -116,7 +121,7 @@ if choice == "Student":
 
                     translation = st.text_area(
                         f"Your Answer for {a['title']}", 
-                        value=prev_translation or "", 
+                        value=prev_translation or mt_suggestion, 
                         key=a_id, 
                         on_change=count_keys
                     )
@@ -192,11 +197,12 @@ else:  # Instructor
             st.write(f"Metrics: {s.get('stats', {})}")
             st.markdown("---")
 
-        # ------------------ Download Word ------------------
+        # Download all submissions as Word
         if st.button("Download All Submissions as Word"):
             doc = Document()
             for s in submissions.values():
                 doc.add_heading(f"{s['assignment_title']} - {s['student_name']}", level=2)
+                doc.add_paragraph("Source Text: " + assignments.get(next((k for k,v in assignments.items() if v["title"]==s['assignment_title']), None), {}).get("text",""))
                 doc.add_paragraph(s['translation'])
                 doc.add_paragraph(f"Metrics: {s.get('stats', {})}")
                 doc.add_paragraph("-"*50)
