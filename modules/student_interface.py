@@ -1,6 +1,6 @@
 import streamlit as st
 import uuid
-from utils.storage import load_assignments, load_submissions, save_submissions
+from ..utils.storage import load_assignments, load_submissions, save_submissions
 
 def student_dashboard():
     st.header("🎓 Student Dashboard")
@@ -38,3 +38,4 @@ def student_dashboard():
                     st.success(f"✅ {student_name}, your submission has been saved!")
     else:
         st.info("No assignments available yet.")
+
