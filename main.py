@@ -12,6 +12,3 @@ choice = st.sidebar.radio("Go to", ["Student", "Instructor"])
 
 if choice == "Student":
     student_interface.student_dashboard()
-else:
-    instructor_interface.instructor_dashboard()
-
