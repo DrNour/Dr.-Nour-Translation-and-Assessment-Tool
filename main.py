@@ -5,6 +5,7 @@ import uuid
 import time
 from difflib import SequenceMatcher
 from docx import Document
+from docx.shared import RGBColor
 from io import BytesIO
 
 # ------------------ Data Setup ------------------
@@ -49,11 +50,9 @@ def calculate_metrics(source, translation, start_time, keystrokes, prev_translat
     end_time = time.time()
     time_spent = round(end_time - start_time, 2)
 
-    # Simple fluency & accuracy placeholders
     fluency = round(len(translation.split()) / max(1, len(source.split())), 2)
     accuracy = round(1 - (len(set(source.split()) - set(translation.split())) / max(1, len(source.split()))), 2)
 
-    # Edits
     additions, omissions, edits = 0, 0, 0
     if prev_translation:
         s = prev_translation.split()
@@ -76,6 +75,30 @@ def calculate_metrics(source, translation, start_time, keystrokes, prev_translat
         "omissions": omissions,
         "edits": edits
     }
+
+# ------------------ Word Export with Colored Edits ------------------
+def add_colored_paragraph(doc, mt_text, student_text):
+    mt_words = mt_text.split()
+    st_words = student_text.split()
+    sm = SequenceMatcher(None, mt_words, st_words)
+    p = doc.add_paragraph()
+    for tag, i1, i2, j1, j2 in sm.get_opcodes():
+        if tag == "equal":
+            for w in mt_words[i1:i2]:
+                run = p.add_run(w + " ")
+        elif tag == "replace":
+            for w in st_words[j1:j2]:
+                run = p.add_run(w + " ")
+                run.font.color.rgb = RGBColor(0, 0, 255)
+        elif tag == "insert":
+            for w in st_words[j1:j2]:
+                run = p.add_run(w + " ")
+                run.font.color.rgb = RGBColor(0, 128, 0)
+        elif tag == "delete":
+            for w in mt_words[i1:i2]:
+                run = p.add_run(w + " ")
+                run.font.color.rgb = RGBColor(255, 0, 0)
+                run.font.strike = True
 
 # ------------------ Streamlit App ------------------
 st.sidebar.title("Navigation")
@@ -100,17 +123,13 @@ if choice == "Student":
                     st.write("📖 Instructions:", a.get("instructions", ""))
                     st.write("✍️ Source Text (ST):", a.get("text", ""))
 
-                    # Example: MT output placeholder
                     mt_suggestion = f"[MT suggestion for '{a.get('text','')[:50]}...']"
-                    st.write("💡 Machine Translation (MT) Suggestion:")
-                    st.info(mt_suggestion)
 
                     prev_translation = None
                     for s in submissions.values():
                         if s.get("student_name")==student_name and s.get("assignment_title")==a["title"]:
                             prev_translation = s["translation"]
 
-                    # Time & keystrokes
                     if f"start_{a_id}" not in st.session_state:
                         st.session_state[f"start_{a_id}"] = time.time()
                     if f"keystrokes_{a_id}" not in st.session_state:
@@ -119,32 +138,44 @@ if choice == "Student":
                     def count_keys():
                         st.session_state[f"keystrokes_{a_id}"] += 1
 
-                    translation = st.text_area(
-                        f"Your Answer for {a['title']}", 
-                        value=prev_translation or mt_suggestion, 
-                        key=a_id, 
-                        on_change=count_keys
-                    )
+                    col1, col2, col3 = st.columns([2,2,3])
 
-                    if st.button(f"Submit {a['title']}", key=f"btn_{a_id}"):
-                        stats = calculate_metrics(
-                            source=a["text"],
-                            translation=translation,
-                            start_time=st.session_state[f"start_{a_id}"],
-                            keystrokes=st.session_state[f"keystrokes_{a_id}"],
-                            prev_translation=prev_translation
-                        )
-                        save_submissions(
-                            assignment_title=a["title"],
-                            translation=translation,
-                            student_name=student_name,
-                            group=student_group,
-                            stats=stats
-                        )
-                        st.success(f"✅ {student_name}, your submission has been saved!")
-                        st.json(stats)
+                    with col1:
+                        st.markdown("**Source Text (ST)**")
+                        st.write(a.get("text", ""))
 
-        # Show previous submissions
+                    with col2:
+                        st.markdown("**Machine Translation (MT)**")
+                        st.info(mt_suggestion)
+
+                    with col3:
+                        st.markdown("**Your Translation (Editable)**")
+                        translation = st.text_area(
+                            f"Your Answer for {a['title']}", 
+                            value=prev_translation or mt_suggestion, 
+                            key=a_id, 
+                            height=200,
+                            on_change=count_keys
+                        )
+
+                        if st.button(f"Submit {a['title']}", key=f"btn_{a_id}"):
+                            stats = calculate_metrics(
+                                source=a["text"],
+                                translation=translation,
+                                start_time=st.session_state[f"start_{a_id}"],
+                                keystrokes=st.session_state[f"keystrokes_{a_id}"],
+                                prev_translation=prev_translation
+                            )
+                            save_submissions(
+                                assignment_title=a["title"],
+                                translation=translation,
+                                student_name=student_name,
+                                group=student_group,
+                                stats=stats
+                            )
+                            st.success(f"✅ {student_name}, your submission has been saved!")
+                            st.json(stats)
+
         st.subheader("📂 Your Previous Submissions")
         for s_id, s in submissions.items():
             if s.get("student_name") == student_name:
@@ -197,22 +228,21 @@ else:  # Instructor
             st.write(f"Metrics: {s.get('stats', {})}")
             st.markdown("---")
 
-        # Download all submissions as Word
-        if st.button("Download All Submissions as Word"):
+        if st.button("Download All Submissions as Word with Edits"):
             doc = Document()
             for s in submissions.values():
                 doc.add_heading(f"{s['assignment_title']} - {s['student_name']}", level=2)
-                doc.add_paragraph("Source Text: " + assignments.get(next((k for k,v in assignments.items() if v["title"]==s['assignment_title']), None), {}).get("text",""))
-                doc.add_paragraph(s['translation'])
+                mt_suggestion = f"[MT suggestion for '{assignments.get(next((k for k,v in assignments.items() if v['title']==s['assignment_title']), None), {}).get('text','')[:50]}...']"
+                add_colored_paragraph(doc, mt_suggestion, s['translation'])
                 doc.add_paragraph(f"Metrics: {s.get('stats', {})}")
                 doc.add_paragraph("-"*50)
             buffer = BytesIO()
             doc.save(buffer)
             buffer.seek(0)
             st.download_button(
-                label="Download Submissions.docx",
+                label="Download Submissions with Edits.docx",
                 data=buffer,
-                file_name="submissions.docx",
+                file_name="submissions_with_edits.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             )
     else:
