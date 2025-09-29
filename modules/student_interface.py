@@ -1,10 +1,9 @@
 import streamlit as st
-from ..utils.storage import load_assignments, load_submissions, save_submissions
+from utils.storage import load_assignments, load_submissions, save_submissions
 
 def student_dashboard():
     st.title("Student Dashboard")
 
-    # Load assignments
     assignments = load_assignments()
 
     if not assignments:
@@ -21,7 +20,6 @@ def student_dashboard():
         save_submissions(selected, translation)
         st.success("Your translation has been submitted!")
 
-    # Show previous submissions
     submissions = load_submissions()
     if submissions:
         st.subheader("Your Previous Submissions")
