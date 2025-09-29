@@ -1,12 +1,14 @@
 import streamlit as st
 from modules import student_interface, instructor_interface
 
-st.title("Translation & Post-Editing Tool - Production Version")
+def main():
+    st.sidebar.title("Navigation")
+    choice = st.sidebar.radio("Go to", ["Student", "Instructor"])
 
-tab = st.sidebar.selectbox("Select Dashboard", ["Student", "Instructor"])
+    if choice == "Student":
+        student_interface.student_dashboard()
+    elif choice == "Instructor":
+        instructor_interface.instructor_dashboard()
 
-if tab == "Student":
-    student_dashboard()
-else:
-    instructor_dashboard()
-
+if __name__ == "__main__":
+    main()
