@@ -1,5 +1,12 @@
 import streamlit as st
-from modules import storage
+import os
+import importlib.util
+
+# import storage from same folder
+BASE_DIR = os.path.dirname(__file__)
+spec = importlib.util.spec_from_file_location("storage", os.path.join(BASE_DIR, "storage.py"))
+storage = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(storage)
 
 def student_dashboard():
     st.title("🎓 Student Dashboard")
