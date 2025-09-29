@@ -1,5 +1,5 @@
 import streamlit as st
-from utils.storage import load_assignments, load_submissions, save_submissions
+from modules.storage import load_assignments, load_submissions, save_submissions
 
 def student_dashboard():
     st.title("🎓 Student Dashboard")
@@ -22,7 +22,7 @@ def student_dashboard():
         if a.get("group", "all") in [student_group, "all"]:
             st.subheader(a["title"])
             st.write("📖 Instructions:", a.get("instructions", ""))
-            st.write("✍️ Exercise:", a.get("text", a.get("exercise_text", "")))
+            st.write("✍️ Exercise:", a.get("text", ""))
 
             translation = st.text_area(f"Your Answer for {a['title']}", key=a_id)
 
