@@ -26,7 +26,7 @@ def instructor_dashboard():
             save_assignments(assignments)
             st.success(f"Assignment '{title}' created successfully!")
 
-    # ---- List Existing Assignments ----
+    # ---- Existing Assignments ----
     st.subheader("📂 Existing Assignments")
     assignments = load_assignments()
     if assignments:
@@ -38,7 +38,7 @@ def instructor_dashboard():
     else:
         st.info("No assignments yet.")
 
-    # ---- Review Submissions ----
+    # ---- Student Submissions ----
     st.subheader("📥 Student Submissions")
     submissions = load_submissions()
     if submissions:
