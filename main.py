@@ -85,7 +85,7 @@ def add_colored_paragraph(doc, mt_text, student_text):
     for tag, i1, i2, j1, j2 in sm.get_opcodes():
         if tag == "equal":
             for w in mt_words[i1:i2]:
-                run = p.add_run(w + " ")
+                p.add_run(w + " ")
         elif tag == "replace":
             for w in st_words[j1:j2]:
                 run = p.add_run(w + " ")
@@ -121,10 +121,7 @@ if choice == "Student":
                 if a.get("group", "all") in [student_group, "all"]:
                     st.subheader(a["title"])
                     st.write("📖 Instructions:", a.get("instructions", ""))
-                    st.write("✍️ Source Text (ST):", a.get("text", ""))
-
-                    mt_suggestion = f"[MT suggestion for '{a.get('text','')[:50]}...']"
-
+                    
                     prev_translation = None
                     for s in submissions.values():
                         if s.get("student_name")==student_name and s.get("assignment_title")==a["title"]:
@@ -142,17 +139,17 @@ if choice == "Student":
 
                     with col1:
                         st.markdown("**Source Text (ST)**")
-                        st.write(a.get("text", ""))
+                        st.write(a.get("st_text", ""))
 
                     with col2:
                         st.markdown("**Machine Translation (MT)**")
-                        st.info(mt_suggestion)
+                        st.info(a.get("mt_text", ""))
 
                     with col3:
                         st.markdown("**Your Translation (Editable)**")
                         translation = st.text_area(
                             f"Your Answer for {a['title']}", 
-                            value=prev_translation or mt_suggestion, 
+                            value=prev_translation or a.get("mt_text",""),
                             key=a_id, 
                             height=200,
                             on_change=count_keys
@@ -160,7 +157,7 @@ if choice == "Student":
 
                         if st.button(f"Submit {a['title']}", key=f"btn_{a_id}"):
                             stats = calculate_metrics(
-                                source=a["text"],
+                                source=a["st_text"],
                                 translation=translation,
                                 start_time=st.session_state[f"start_{a_id}"],
                                 keystrokes=st.session_state[f"keystrokes_{a_id}"],
@@ -190,18 +187,20 @@ else:  # Instructor
 
     st.subheader("Create New Assignment")
     title = st.text_input("Assignment Title")
-    text = st.text_area("Assignment Text")
+    st_text = st.text_area("Source Text (ST)")
+    mt_text = st.text_area("Machine Translation Suggestion (MT, optional)")
     instructions = st.text_area("Instructions")
     group = st.selectbox("Assign to Group", ["all", "Group A", "Group B", "Group C"])
 
     if st.button("Save Assignment"):
-        if title.strip() and text.strip():
+        if title.strip() and st_text.strip():
             assignments = load_assignments()
             assignment_id = str(uuid.uuid4())
             assignments[assignment_id] = {
                 "id": assignment_id,
                 "title": title,
-                "text": text,
+                "st_text": st_text,
+                "mt_text": mt_text or f"[MT suggestion placeholder for '{st_text[:50]}...']",
                 "instructions": instructions,
                 "group": group
             }
@@ -214,7 +213,8 @@ else:  # Instructor
         for a in assignments.values():
             st.write(f"**{a['title']}** (Group: {a['group']})")
             st.write(a.get("instructions", ""))
-            st.write(a.get("text", ""))
+            st.write(a.get("st_text", ""))
+            st.write(a.get("mt_text",""))
             st.markdown("---")
     else:
         st.info("No assignments yet.")
@@ -232,8 +232,8 @@ else:  # Instructor
             doc = Document()
             for s in submissions.values():
                 doc.add_heading(f"{s['assignment_title']} - {s['student_name']}", level=2)
-                mt_suggestion = f"[MT suggestion for '{assignments.get(next((k for k,v in assignments.items() if v['title']==s['assignment_title']), None), {}).get('text','')[:50]}...']"
-                add_colored_paragraph(doc, mt_suggestion, s['translation'])
+                a_ref = next((v for v in assignments.values() if v['title']==s['assignment_title']), {})
+                add_colored_paragraph(doc, a_ref.get("mt_text",""), s['translation'])
                 doc.add_paragraph(f"Metrics: {s.get('stats', {})}")
                 doc.add_paragraph("-"*50)
             buffer = BytesIO()
