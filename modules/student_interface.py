@@ -1,41 +1,29 @@
 import streamlit as st
-import uuid
 from ..utils.storage import load_assignments, load_submissions, save_submissions
 
 def student_dashboard():
-    st.header("🎓 Student Dashboard")
+    st.title("Student Dashboard")
 
-    student_name = st.text_input("Enter your name")
-    student_group = st.selectbox("Select your group", ["Group A", "Group B", "Group C"])
+    # Load assignments
+    assignments = load_assignments()
 
-    if not student_name.strip():
-        st.warning("Please enter your name to continue.")
+    if not assignments:
+        st.info("No assignments available yet.")
         return
 
-    assignments = load_assignments()
+    selected = st.selectbox("Choose an assignment", list(assignments.keys()))
+    st.write("### Assignment Text")
+    st.write(assignments[selected]["text"])
+
+    translation = st.text_area("Enter your translation here")
+
+    if st.button("Submit Translation"):
+        save_submissions(selected, translation)
+        st.success("Your translation has been submitted!")
+
+    # Show previous submissions
     submissions = load_submissions()
-
-    if assignments:
-        for a in assignments.values():
-            if a["group"] == "all" or a["group"] == student_group:
-                st.subheader(a["title"])
-                st.write("📖 Instructions:", a["instructions"])
-                st.write("✍️ Exercise:", a["exercise_text"])
-
-                translation = st.text_area(f"Your Answer for {a['title']}", key=a["id"])
-
-                if st.button(f"Submit {a['id']}", key=f"btn_{a['id']}"):
-                    submission_id = str(uuid.uuid4())
-                    submissions[submission_id] = {
-                        "id": submission_id,
-                        "assignment_id": a["id"],
-                        "assignment_title": a["title"],
-                        "student_name": student_name,
-                        "group": student_group,
-                        "translation": translation,
-                    }
-                    save_submissions(submissions)
-                    st.success(f"✅ {student_name}, your submission has been saved!")
-    else:
-        st.info("No assignments available yet.")
-
+    if submissions:
+        st.subheader("Your Previous Submissions")
+        for task, sub in submissions.items():
+            st.write(f"**{task}**: {sub}")
