@@ -1,5 +1,12 @@
+import sys
+import os
+
+# Add modules folder to Python path (fail-proof)
+sys.path.append(os.path.join(os.path.dirname(__file__), "modules"))
+
 import streamlit as st
-from modules import student_interface, instructor_interface
+import student_interface
+import instructor_interface
 
 st.sidebar.title("Navigation")
 choice = st.sidebar.radio("Go to", ["Student", "Instructor"])
