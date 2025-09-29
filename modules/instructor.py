@@ -3,44 +3,48 @@ import uuid
 from utils.storage import load_assignments, save_assignments, load_submissions
 
 def instructor_dashboard():
-    st.header("📘 Instructor Dashboard")
+    st.title("📘 Instructor Dashboard")
 
-    # ---- Create Assignment ----
+    # ---- Create New Assignment ----
     st.subheader("Create New Assignment")
     title = st.text_input("Assignment Title")
+    text = st.text_area("Assignment Text")
     instructions = st.text_area("Instructions")
-    exercise_text = st.text_area("Exercise Text")
     group = st.selectbox("Assign to Group", ["all", "Group A", "Group B", "Group C"])
 
     if st.button("Save Assignment"):
-        assignments = load_assignments()
-        assignment_id = str(uuid.uuid4())
-        assignments[assignment_id] = {
-            "id": assignment_id,
-            "title": title,
-            "instructions": instructions,
-            "exercise_text": exercise_text,
-            "group": group,
-        }
-        save_assignments(assignments)
-        st.success("✅ Assignment saved successfully!")
+        if title.strip() and text.strip():
+            assignments = load_assignments()
+            assignment_id = str(uuid.uuid4())
+            assignments[assignment_id] = {
+                "id": assignment_id,
+                "title": title,
+                "text": text,
+                "instructions": instructions,
+                "group": group
+            }
+            save_assignments(assignments)
+            st.success(f"Assignment '{title}' created successfully!")
 
-    # ---- List Assignments ----
+    # ---- List Existing Assignments ----
     st.subheader("📂 Existing Assignments")
     assignments = load_assignments()
     if assignments:
         for a in assignments.values():
-            st.markdown(f"**{a['title']}**  \n_Group: {a['group']}_  \n📖 {a['instructions']}  \n✍️ {a['exercise_text']}")
+            st.write(f"**{a['title']}** (Group: {a['group']})")
+            st.write(a.get("instructions", ""))
+            st.write(a.get("text", ""))
             st.markdown("---")
     else:
-        st.info("No assignments created yet.")
+        st.info("No assignments yet.")
 
     # ---- Review Submissions ----
     st.subheader("📥 Student Submissions")
     submissions = load_submissions()
     if submissions:
         for s in submissions.values():
-            st.markdown(f"**{s['student_name']}** ({s['group']}) - {s['assignment_title']}  \n✍️ {s['translation']}")
+            st.write(f"**{s['student_name']}** ({s['group']}) - {s['assignment_title']}")
+            st.write(f"✍️ {s['translation']}")
             st.markdown("---")
     else:
         st.info("No submissions yet.")
