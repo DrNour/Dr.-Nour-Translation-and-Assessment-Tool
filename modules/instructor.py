@@ -1,11 +1,11 @@
 import streamlit as st
 import uuid
-from modules.storage import load_assignments, save_assignments, load_submissions
+import storage
 
 def instructor_dashboard():
     st.title("📘 Instructor Dashboard")
 
-    # ---- Create Assignment ----
+    # Create Assignment
     st.subheader("Create New Assignment")
     title = st.text_input("Assignment Title")
     text = st.text_area("Assignment Text")
@@ -14,7 +14,7 @@ def instructor_dashboard():
 
     if st.button("Save Assignment"):
         if title.strip() and text.strip():
-            assignments = load_assignments()
+            assignments = storage.load_assignments()
             assignment_id = str(uuid.uuid4())
             assignments[assignment_id] = {
                 "id": assignment_id,
@@ -23,12 +23,12 @@ def instructor_dashboard():
                 "instructions": instructions,
                 "group": group
             }
-            save_assignments(assignments)
+            storage.save_assignments(assignments)
             st.success(f"Assignment '{title}' created successfully!")
 
-    # ---- Existing Assignments ----
+    # Existing Assignments
     st.subheader("📂 Existing Assignments")
-    assignments = load_assignments()
+    assignments = storage.load_assignments()
     if assignments:
         for a in assignments.values():
             st.write(f"**{a['title']}** (Group: {a['group']})")
@@ -38,9 +38,9 @@ def instructor_dashboard():
     else:
         st.info("No assignments yet.")
 
-    # ---- Student Submissions ----
+    # Student Submissions
     st.subheader("📥 Student Submissions")
-    submissions = load_submissions()
+    submissions = storage.load_submissions()
     if submissions:
         for s in submissions.values():
             st.write(f"**{s['student_name']}** ({s['group']}) - {s['assignment_title']}")
