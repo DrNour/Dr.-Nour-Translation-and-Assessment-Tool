@@ -17,12 +17,14 @@ def save_json(file_path, data):
     with open(file_path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=4, ensure_ascii=False)
 
+# Assignments
 def load_assignments():
     return load_json(ASSIGNMENTS_FILE)
 
 def save_assignments(assignments):
     save_json(ASSIGNMENTS_FILE, assignments)
 
+# Submissions
 def load_submissions():
     return load_json(SUBMISSIONS_FILE)
 
