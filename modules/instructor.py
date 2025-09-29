@@ -1,6 +1,6 @@
 import streamlit as st
 import uuid
-import storage
+from modules import storage
 
 def instructor_dashboard():
     st.title("📘 Instructor Dashboard")
