@@ -1,5 +1,5 @@
 import streamlit as st
-import storage
+from modules import storage
 
 def student_dashboard():
     st.title("🎓 Student Dashboard")
