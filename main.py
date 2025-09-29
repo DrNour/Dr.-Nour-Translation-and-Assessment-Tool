@@ -1,6 +1,5 @@
 import streamlit as st
-from modules.student_interface import student_dashboard
-from modules.instructor import instructor_dashboard
+from modules import student_interface, instructor_interface
 
 st.title("Translation & Post-Editing Tool - Production Version")
 
@@ -10,3 +9,4 @@ if tab == "Student":
     student_dashboard()
 else:
     instructor_dashboard()
+
