@@ -28,7 +28,6 @@ def evaluate_translation(st_text, mt_text, student_text):
 
     additions = max(0, len(student_text.split()) - len(mt_text.split()))
     omissions = max(0, len(mt_text.split()) - len(student_text.split()))
-
     edits = sum(1 for a, b in zip(mt_text.split(), student_text.split()) if a != b)
 
     return {
@@ -126,22 +125,31 @@ def student_dashboard():
     st_text = exercises[ex_id]["source_text"]
     mt_text = exercises[ex_id]["mt_text"]
 
+    # ---------------- Mode Selection ----------------
+    task_type = st.radio("Choose your task:", ["Translate from Scratch", "Post-edit MT Output"])
+
     st.subheader("Source Text")
     st.text_area("ST", st_text, height=200, disabled=True)
 
-    st.subheader("Machine Translation Output")
-    st.text_area("MT", mt_text, height=200, disabled=True)
+    student_text = ""
 
-    st.subheader("Your Translation / Post-Editing")
+    if task_type == "Translate from Scratch":
+        st.subheader("Your Translation")
+        student_text = st.text_area("Type your translation here:", height=300,
+                                    key="translation_input")
+
+    elif task_type == "Post-edit MT Output":
+        st.subheader("Machine Translation Output (Editable)")
+        student_text = st.text_area("Edit the MT output below:", mt_text, height=300,
+                                    key="postedit_input")
+
+    # ---------------- Metrics + Save ----------------
     if "start_time" not in st.session_state:
         st.session_state["start_time"] = time.time()
     if "keystrokes" not in st.session_state:
         st.session_state["keystrokes"] = 0
 
-    student_text = st.text_area("Type your translation here:", height=300,
-                                key="translation_input", on_change=lambda: increment_keystrokes())
-
-    if st.button("Submit Translation"):
+    if st.button("Submit"):
         time_spent = time.time() - st.session_state["start_time"]
         metrics = evaluate_translation(st_text, mt_text, student_text)
 
@@ -152,15 +160,12 @@ def student_dashboard():
             "time_spent_sec": round(time_spent, 2),
             "keystrokes": st.session_state["keystrokes"],
             "metrics": metrics,
+            "task_type": task_type,
         }
 
         save_json(SUBMISSIONS_FILE, submissions)
         st.success("✅ Submission saved!")
-
         st.json(metrics)
-
-def increment_keystrokes():
-    st.session_state["keystrokes"] += 1
 
 # ----------------- Main -----------------
 def main():
