@@ -94,7 +94,6 @@ def instructor_dashboard():
         if st_text.strip() == "":
             st.error("Source text is required.")
         else:
-            # Sequential numeric exercise IDs
             existing_ids = [int(k) for k in exercises.keys()] if exercises else []
             next_id = str(max(existing_ids)+1 if existing_ids else 1).zfill(3)
             exercises[next_id] = {"source_text": st_text, "mt_text": mt_text if mt_text.strip() else None}
@@ -150,15 +149,21 @@ def student_dashboard():
 
     initial_text = "" if task_type=="Translate" else ex.get("mt_text","")
     st.subheader("Your Work")
-    student_text = st.text_area("Type your translation / post-edit here", initial_text, height=300)
+    student_text = st.text_area(
+        "Type your translation / post-edit here",
+        initial_text,
+        height=400
+    )
 
-    if "start_time" not in st.session_state:
-        st.session_state["start_time"] = time.time()
-    if "keystrokes" not in st.session_state:
-        st.session_state["keystrokes"] = 0
+    # Timer & keystrokes per exercise
+    if f"start_time_{ex_id}" not in st.session_state:
+        st.session_state[f"start_time_{ex_id}"] = time.time()
+    if f"keystrokes_{ex_id}" not in st.session_state:
+        st.session_state[f"keystrokes_{ex_id}"] = 0
 
     if st.button("Submit"):
-        time_spent = time.time() - st.session_state["start_time"]
+        time_spent = time.time() - st.session_state[f"start_time_{ex_id}"]
+        st.session_state[f"keystrokes_{ex_id}"] = len(student_text)
         metrics = evaluate_translation(ex["source_text"], ex.get("mt_text"), student_text, task_type)
         submissions[student_name][ex_id] = {
             "source_text": ex["source_text"],
@@ -166,12 +171,21 @@ def student_dashboard():
             "student_text": student_text,
             "task_type": task_type,
             "time_spent_sec": round(time_spent,2),
-            "keystrokes": st.session_state["keystrokes"],
+            "keystrokes": st.session_state[f"keystrokes_{ex_id}"],
             "metrics": metrics
         }
         save_json(SUBMISSIONS_FILE, submissions)
         st.success("Submission saved!")
-        st.json(metrics)
+        st.subheader("Your Metrics")
+        st.markdown(f"""
+        - **Fluency:** {metrics['fluency']}
+        - **Accuracy:** {metrics['accuracy']}
+        - **Additions:** {metrics['additions']}
+        - **Omissions:** {metrics['omissions']}
+        - **Edits:** {metrics['edits']}
+        - **Time Spent:** {round(time_spent,2)} sec
+        - **Keystrokes:** {st.session_state[f"keystrokes_{ex_id}"]}
+        """)
 
 # ---------------- Main ----------------
 def main():
