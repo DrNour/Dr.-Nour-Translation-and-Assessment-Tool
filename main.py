@@ -1,249 +1,176 @@
 import streamlit as st
-import os
 import json
-import uuid
+import os
 import time
 from difflib import SequenceMatcher
 from docx import Document
-from docx.shared import RGBColor
 from io import BytesIO
 
-# ------------------ Data Setup ------------------
-DATA_DIR = "data"
-os.makedirs(DATA_DIR, exist_ok=True)
-ASSIGNMENTS_FILE = os.path.join(DATA_DIR, "assignments.json")
-SUBMISSIONS_FILE = os.path.join(DATA_DIR, "submissions.json")
+# ----------------- Storage Helpers -----------------
+EXERCISES_FILE = "exercises.json"
+SUBMISSIONS_FILE = "submissions.json"
 
-def load_json(file_path):
-    if not os.path.exists(file_path):
-        return {}
-    with open(file_path, "r", encoding="utf-8") as f:
-        return json.load(f)
+def load_json(file):
+    if os.path.exists(file):
+        with open(file, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {}
 
-def save_json(file_path, data):
-    with open(file_path, "w", encoding="utf-8") as f:
+def save_json(file, data):
+    with open(file, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=4, ensure_ascii=False)
 
-def load_assignments():
-    return load_json(ASSIGNMENTS_FILE)
+# ----------------- Metrics -----------------
+def evaluate_translation(st_text, mt_text, student_text):
+    """Simple evaluation of translation with edit metrics."""
+    fluency = len(student_text.split()) / (len(st_text.split()) + 1)
+    accuracy = SequenceMatcher(None, mt_text, student_text).ratio()
 
-def save_assignments(assignments):
-    save_json(ASSIGNMENTS_FILE, assignments)
+    additions = max(0, len(student_text.split()) - len(mt_text.split()))
+    omissions = max(0, len(mt_text.split()) - len(student_text.split()))
 
-def load_submissions():
-    return load_json(SUBMISSIONS_FILE)
-
-def save_submissions(assignment_title, translation, student_name=None, group=None, stats=None):
-    submissions = load_submissions()
-    submission_id = f"{assignment_title}_{student_name or 'Anonymous'}_{len(submissions)+1}"
-    submissions[submission_id] = {
-        "assignment_title": assignment_title,
-        "translation": translation,
-        "student_name": student_name,
-        "group": group,
-        "stats": stats or {}
-    }
-    save_json(SUBMISSIONS_FILE, submissions)
-
-# ------------------ Metrics ------------------
-def calculate_metrics(source, translation, start_time, keystrokes, prev_translation=None):
-    end_time = time.time()
-    time_spent = round(end_time - start_time, 2)
-
-    fluency = round(len(translation.split()) / max(1, len(source.split())), 2)
-    accuracy = round(1 - (len(set(source.split()) - set(translation.split())) / max(1, len(source.split()))), 2)
-
-    additions, omissions, edits = 0, 0, 0
-    if prev_translation:
-        s = prev_translation.split()
-        t = translation.split()
-        sm = SequenceMatcher(None, s, t)
-        for tag, i1, i2, j1, j2 in sm.get_opcodes():
-            if tag == 'replace':
-                edits += max(i2-i1, j2-j1)
-            elif tag == 'delete':
-                omissions += i2 - i1
-            elif tag == 'insert':
-                additions += j2 - j1
+    edits = sum(1 for a, b in zip(mt_text.split(), student_text.split()) if a != b)
 
     return {
-        "fluency": fluency,
-        "accuracy": accuracy,
-        "time_spent_sec": time_spent,
-        "keystrokes": keystrokes,
+        "fluency": round(fluency, 2),
+        "accuracy": round(accuracy, 2),
         "additions": additions,
         "omissions": omissions,
-        "edits": edits
+        "edits": edits,
     }
 
-# ------------------ Word Export with Colored Edits ------------------
-def add_colored_paragraph(doc, mt_text, student_text):
-    mt_words = mt_text.split()
-    st_words = student_text.split()
-    sm = SequenceMatcher(None, mt_words, st_words)
-    p = doc.add_paragraph()
-    for tag, i1, i2, j1, j2 in sm.get_opcodes():
-        if tag == "equal":
-            for w in mt_words[i1:i2]:
-                p.add_run(w + " ")
-        elif tag == "replace":
-            for w in st_words[j1:j2]:
-                run = p.add_run(w + " ")
-                run.font.color.rgb = RGBColor(0, 0, 255)
-        elif tag == "insert":
-            for w in st_words[j1:j2]:
-                run = p.add_run(w + " ")
-                run.font.color.rgb = RGBColor(0, 128, 0)
-        elif tag == "delete":
-            for w in mt_words[i1:i2]:
-                run = p.add_run(w + " ")
-                run.font.color.rgb = RGBColor(255, 0, 0)
-                run.font.strike = True
+# ----------------- Word Export -----------------
+def export_submissions_word(submissions, filename="submissions.docx"):
+    doc = Document()
+    doc.add_heading("Student Submissions", 0)
 
-# ------------------ Streamlit App ------------------
-st.sidebar.title("Navigation")
-choice = st.sidebar.radio("Go to", ["Student", "Instructor"])
+    for student, subs in submissions.items():
+        doc.add_heading(f"Student: {student}", level=1)
+        for ex_id, sub in subs.items():
+            doc.add_heading(f"Exercise {ex_id}", level=2)
+            doc.add_paragraph(f"Source Text:\n{sub['source_text']}")
+            doc.add_paragraph(f"MT Output:\n{sub['mt_text']}")
+            doc.add_paragraph(f"Student Translation:\n{sub['student_text']}")
 
-if choice == "Student":
-    st.title("🎓 Student Dashboard")
+            metrics = sub.get("metrics", {})
+            doc.add_paragraph(f"Fluency: {metrics.get('fluency', 0)}")
+            doc.add_paragraph(f"Accuracy: {metrics.get('accuracy', 0)}")
+            doc.add_paragraph(f"Additions: {metrics.get('additions', 0)}")
+            doc.add_paragraph(f"Omissions: {metrics.get('omissions', 0)}")
+            doc.add_paragraph(f"Edits: {metrics.get('edits', 0)}")
+            doc.add_paragraph(f"Time Spent: {sub.get('time_spent_sec', 0):.2f} sec")
+            doc.add_paragraph(f"Keystrokes: {sub.get('keystrokes', 0)}")
+            doc.add_paragraph("---")
 
-    student_name = st.text_input("Enter your name")
-    student_group = st.selectbox("Select your group", ["Group A", "Group B", "Group C"])
+    buf = BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    return buf
 
-    if student_name.strip():
-        assignments = load_assignments()
-        submissions = load_submissions()
+# ----------------- Instructor Dashboard -----------------
+def instructor_dashboard():
+    st.title("Instructor Dashboard")
 
-        if not assignments:
-            st.info("No assignments available yet.")
-        else:
-            for a_id, a in assignments.items():
-                if a.get("group", "all") in [student_group, "all"]:
-                    st.subheader(a["title"])
-                    st.write("📖 Instructions:", a.get("instructions", ""))
-                    
-                    prev_translation = None
-                    for s in submissions.values():
-                        if s.get("student_name")==student_name and s.get("assignment_title")==a["title"]:
-                            prev_translation = s["translation"]
+    exercises = load_json(EXERCISES_FILE)
+    submissions = load_json(SUBMISSIONS_FILE)
 
-                    if f"start_{a_id}" not in st.session_state:
-                        st.session_state[f"start_{a_id}"] = time.time()
-                    if f"keystrokes_{a_id}" not in st.session_state:
-                        st.session_state[f"keystrokes_{a_id}"] = 0
+    st.subheader("Create New Exercise")
+    ex_id = str(len(exercises) + 1)
+    st_text = st.text_area("Source Text", height=200)
+    mt_text = st.text_area("Machine Translation Output", height=200)
 
-                    def count_keys():
-                        st.session_state[f"keystrokes_{a_id}"] += 1
+    if st.button("Save Exercise"):
+        if st_text.strip() and mt_text.strip():
+            exercises[ex_id] = {"source_text": st_text, "mt_text": mt_text}
+            save_json(EXERCISES_FILE, exercises)
+            st.success(f"Exercise {ex_id} saved!")
 
-                    col1, col2, col3 = st.columns([2,2,3])
-
-                    with col1:
-                        st.markdown("**Source Text (ST)**")
-                        st.write(a.get("st_text", ""))
-
-                    with col2:
-                        st.markdown("**Machine Translation (MT)**")
-                        st.info(a.get("mt_text", ""))
-
-                    with col3:
-                        st.markdown("**Your Translation (Editable)**")
-                        translation = st.text_area(
-                            f"Your Answer for {a['title']}", 
-                            value=prev_translation or a.get("mt_text",""),
-                            key=a_id, 
-                            height=200,
-                            on_change=count_keys
-                        )
-
-                        if st.button(f"Submit {a['title']}", key=f"btn_{a_id}"):
-                            stats = calculate_metrics(
-                                source=a["st_text"],
-                                translation=translation,
-                                start_time=st.session_state[f"start_{a_id}"],
-                                keystrokes=st.session_state[f"keystrokes_{a_id}"],
-                                prev_translation=prev_translation
-                            )
-                            save_submissions(
-                                assignment_title=a["title"],
-                                translation=translation,
-                                student_name=student_name,
-                                group=student_group,
-                                stats=stats
-                            )
-                            st.success(f"✅ {student_name}, your submission has been saved!")
-                            st.json(stats)
-
-        st.subheader("📂 Your Previous Submissions")
-        for s_id, s in submissions.items():
-            if s.get("student_name") == student_name:
-                st.write(f"**{s['assignment_title']}**: {s['translation']}")
-                st.write(f"Metrics: {s.get('stats', {})}")
-
-    else:
-        st.warning("Please enter your name to continue.")
-
-else:  # Instructor
-    st.title("📘 Instructor Dashboard")
-
-    st.subheader("Create New Assignment")
-    title = st.text_input("Assignment Title")
-    st_text = st.text_area("Source Text (ST)")
-    mt_text = st.text_area("Machine Translation Suggestion (MT, optional)")
-    instructions = st.text_area("Instructions")
-    group = st.selectbox("Assign to Group", ["all", "Group A", "Group B", "Group C"])
-
-    if st.button("Save Assignment"):
-        if title.strip() and st_text.strip():
-            assignments = load_assignments()
-            assignment_id = str(uuid.uuid4())
-            assignments[assignment_id] = {
-                "id": assignment_id,
-                "title": title,
-                "st_text": st_text,
-                "mt_text": mt_text or f"[MT suggestion placeholder for '{st_text[:50]}...']",
-                "instructions": instructions,
-                "group": group
-            }
-            save_assignments(assignments)
-            st.success(f"Assignment '{title}' created successfully!")
-
-    st.subheader("📂 Existing Assignments")
-    assignments = load_assignments()
-    if assignments:
-        for a in assignments.values():
-            st.write(f"**{a['title']}** (Group: {a['group']})")
-            st.write(a.get("instructions", ""))
-            st.write(a.get("st_text", ""))
-            st.write(a.get("mt_text",""))
-            st.markdown("---")
-    else:
-        st.info("No assignments yet.")
-
-    st.subheader("📥 Student Submissions")
-    submissions = load_submissions()
+    st.subheader("All Submissions")
     if submissions:
-        for s in submissions.values():
-            st.write(f"**{s['student_name']}** ({s['group']}) - {s['assignment_title']}")
-            st.write(f"✍️ {s['translation']}")
-            st.write(f"Metrics: {s.get('stats', {})}")
-            st.markdown("---")
+        student_choice = st.selectbox("Choose student", list(submissions.keys()))
+        if student_choice:
+            st.write(submissions[student_choice])
 
-        if st.button("Download All Submissions as Word with Edits"):
-            doc = Document()
-            for s in submissions.values():
-                doc.add_heading(f"{s['assignment_title']} - {s['student_name']}", level=2)
-                a_ref = next((v for v in assignments.values() if v['title']==s['assignment_title']), {})
-                add_colored_paragraph(doc, a_ref.get("mt_text",""), s['translation'])
-                doc.add_paragraph(f"Metrics: {s.get('stats', {})}")
-                doc.add_paragraph("-"*50)
-            buffer = BytesIO()
-            doc.save(buffer)
-            buffer.seek(0)
-            st.download_button(
-                label="Download Submissions with Edits.docx",
-                data=buffer,
-                file_name="submissions_with_edits.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            )
+        # Download per student
+        if st.button("Download This Student's Submissions"):
+            buf = export_submissions_word({student_choice: submissions[student_choice]})
+            st.download_button("Download Word", buf, file_name=f"{student_choice}_submissions.docx")
+
+        # Download all
+        if st.button("Download All Submissions"):
+            buf = export_submissions_word(submissions)
+            st.download_button("Download Word", buf, file_name="all_submissions.docx")
     else:
         st.info("No submissions yet.")
+
+# ----------------- Student Dashboard -----------------
+def student_dashboard():
+    st.title("Student Dashboard")
+
+    exercises = load_json(EXERCISES_FILE)
+    submissions = load_json(SUBMISSIONS_FILE)
+
+    student_name = st.text_input("Enter your name:")
+    if not student_name:
+        st.warning("Please enter your name to continue.")
+        return
+
+    if student_name not in submissions:
+        submissions[student_name] = {}
+
+    ex_id = st.selectbox("Choose Exercise", list(exercises.keys()))
+    if not ex_id:
+        st.info("No exercises available yet.")
+        return
+
+    st_text = exercises[ex_id]["source_text"]
+    mt_text = exercises[ex_id]["mt_text"]
+
+    st.subheader("Source Text")
+    st.text_area("ST", st_text, height=200, disabled=True)
+
+    st.subheader("Machine Translation Output")
+    st.text_area("MT", mt_text, height=200, disabled=True)
+
+    st.subheader("Your Translation / Post-Editing")
+    if "start_time" not in st.session_state:
+        st.session_state["start_time"] = time.time()
+    if "keystrokes" not in st.session_state:
+        st.session_state["keystrokes"] = 0
+
+    student_text = st.text_area("Type your translation here:", height=300,
+                                key="translation_input", on_change=lambda: increment_keystrokes())
+
+    if st.button("Submit Translation"):
+        time_spent = time.time() - st.session_state["start_time"]
+        metrics = evaluate_translation(st_text, mt_text, student_text)
+
+        submissions[student_name][ex_id] = {
+            "source_text": st_text,
+            "mt_text": mt_text,
+            "student_text": student_text,
+            "time_spent_sec": round(time_spent, 2),
+            "keystrokes": st.session_state["keystrokes"],
+            "metrics": metrics,
+        }
+
+        save_json(SUBMISSIONS_FILE, submissions)
+        st.success("✅ Submission saved!")
+
+        st.json(metrics)
+
+def increment_keystrokes():
+    st.session_state["keystrokes"] += 1
+
+# ----------------- Main -----------------
+def main():
+    st.sidebar.title("Navigation")
+    role = st.sidebar.radio("Login as:", ["Student", "Instructor"])
+
+    if role == "Student":
+        student_dashboard()
+    else:
+        instructor_dashboard()
+
+if __name__ == "__main__":
+    main()
