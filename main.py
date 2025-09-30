@@ -23,7 +23,10 @@ def save_json(file, data):
 # ---------------- Metrics ----------------
 def evaluate_translation(st_text, mt_text, student_text, task_type):
     fluency = len(student_text.split()) / (len(st_text.split()) + 1)
-    accuracy = SequenceMatcher(None, mt_text if mt_text else "", student_text).ratio() if task_type=="Post-edit MT" else 0.0
+
+    # Accuracy: ST vs student translation for Translate, MT vs student for Post-edit
+    reference_text = mt_text if task_type=="Post-edit MT" and mt_text else st_text
+    accuracy = SequenceMatcher(None, reference_text, student_text).ratio()
 
     additions = omissions = edits = 0
     if task_type=="Post-edit MT" and mt_text:
@@ -94,7 +97,6 @@ def instructor_dashboard():
         if st_text.strip() == "":
             st.error("Source text is required.")
         else:
-            # Only convert numeric keys to integers
             existing_ids = [int(k) for k in exercises.keys() if k.isdigit()] if exercises else []
             next_id = str(max(existing_ids)+1 if existing_ids else 1).zfill(3)
             exercises[next_id] = {"source_text": st_text, "mt_text": mt_text if mt_text.strip() else None}
