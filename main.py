@@ -5,7 +5,6 @@ import time
 from difflib import SequenceMatcher
 from docx import Document
 from io import BytesIO
-import uuid
 
 # ---------------- Storage ----------------
 EXERCISES_FILE = "exercises.json"
@@ -22,12 +21,23 @@ def save_json(file, data):
         json.dump(data, f, indent=4, ensure_ascii=False)
 
 # ---------------- Metrics ----------------
-def evaluate_translation(st_text, mt_text, student_text):
+def evaluate_translation(st_text, mt_text, student_text, task_type):
     fluency = len(student_text.split()) / (len(st_text.split()) + 1)
-    accuracy = SequenceMatcher(None, mt_text if mt_text else "", student_text).ratio()
-    additions = max(0, len(student_text.split()) - len((mt_text or "").split()))
-    omissions = max(0, len((mt_text or "").split()) - len(student_text.split()))
-    edits = sum(1 for a, b in zip((mt_text or "").split(), student_text.split()) if a != b)
+    accuracy = SequenceMatcher(None, mt_text if mt_text else "", student_text).ratio() if task_type=="Post-edit MT" else 0.0
+
+    additions = omissions = edits = 0
+    if task_type=="Post-edit MT" and mt_text:
+        mt_words = mt_text.split()
+        student_words = student_text.split()
+        s = SequenceMatcher(None, mt_words, student_words)
+        for tag, i1, i2, j1, j2 in s.get_opcodes():
+            if tag == "insert":
+                additions += (j2 - j1)
+            elif tag == "delete":
+                omissions += (i2 - i1)
+            elif tag == "replace":
+                edits += max(i2 - i1, j2 - j1)
+
     return {
         "fluency": round(fluency,2),
         "accuracy": round(accuracy,2),
@@ -73,22 +83,23 @@ def export_exercise_word(ex_id, exercise):
 # ---------------- Instructor ----------------
 def instructor_dashboard():
     st.title("Instructor Dashboard")
-
     exercises = load_json(EXERCISES_FILE)
     submissions = load_json(SUBMISSIONS_FILE)
 
     st.subheader("Create New Exercise")
-    st_text = st.text_area("Source Text", height=200)
+    st_text = st.text_area("Source Text (You can use Markdown formatting)", height=200)
     mt_text = st.text_area("Machine Translation Output (optional)", height=200)
 
     if st.button("Save Exercise"):
         if st_text.strip() == "":
             st.error("Source text is required.")
         else:
-            ex_id = str(uuid.uuid4())
-            exercises[ex_id] = {"source_text": st_text, "mt_text": mt_text if mt_text.strip() else None}
+            # Sequential numeric exercise IDs
+            existing_ids = [int(k) for k in exercises.keys()] if exercises else []
+            next_id = str(max(existing_ids)+1 if existing_ids else 1).zfill(3)
+            exercises[next_id] = {"source_text": st_text, "mt_text": mt_text if mt_text.strip() else None}
             save_json(EXERCISES_FILE, exercises)
-            st.success(f"Exercise saved! ID: {ex_id}")
+            st.success(f"Exercise saved! ID: {next_id}")
 
     st.subheader("Download Exercises")
     for ex_id, ex in exercises.items():
@@ -129,7 +140,10 @@ def student_dashboard():
 
     ex = exercises[ex_id]
     st.subheader("Source Text")
-    st.text_area("ST", ex["source_text"], height=200, disabled=True)
+    st.markdown(
+        f"<div style='font-family: Times New Roman; font-size:12pt;'>{ex['source_text']}</div>",
+        unsafe_allow_html=True
+    )
 
     task_options = ["Translate"] if not ex.get("mt_text") else ["Translate", "Post-edit MT"]
     task_type = st.radio("Task Type", task_options)
@@ -145,7 +159,7 @@ def student_dashboard():
 
     if st.button("Submit"):
         time_spent = time.time() - st.session_state["start_time"]
-        metrics = evaluate_translation(ex["source_text"], ex.get("mt_text"), student_text)
+        metrics = evaluate_translation(ex["source_text"], ex.get("mt_text"), student_text, task_type)
         submissions[student_name][ex_id] = {
             "source_text": ex["source_text"],
             "mt_text": ex.get("mt_text"),
