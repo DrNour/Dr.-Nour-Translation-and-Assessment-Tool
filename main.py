@@ -94,7 +94,8 @@ def instructor_dashboard():
         if st_text.strip() == "":
             st.error("Source text is required.")
         else:
-            existing_ids = [int(k) for k in exercises.keys()] if exercises else []
+            # Only convert numeric keys to integers
+            existing_ids = [int(k) for k in exercises.keys() if k.isdigit()] if exercises else []
             next_id = str(max(existing_ids)+1 if existing_ids else 1).zfill(3)
             exercises[next_id] = {"source_text": st_text, "mt_text": mt_text if mt_text.strip() else None}
             save_json(EXERCISES_FILE, exercises)
