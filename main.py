@@ -82,53 +82,69 @@ def student_dashboard():
     st.title("Student Dashboard")
     student_name = st.text_input("Enter your name")
     if not student_name:
-        st.warning("Please enter your name.")
+        st.warning("Please enter your name to see exercises.")
         return
 
-    # Load exercises fresh every time
+    # Load exercises
     ex_df = load_exercises()
     if ex_df.empty:
-        st.info("No exercises available. Instructor needs to add some.")
+        st.error("No exercises available yet. Instructor needs to add exercises.")
         return
 
+    # Ensure exercise_id is treated as string for safe comparison
+    ex_df["exercise_id"] = ex_df["exercise_id"].astype(str)
     ex_id = st.selectbox("Select Exercise", ex_df["exercise_id"].tolist())
     exercise_row = ex_df[ex_df["exercise_id"] == ex_id].iloc[0]
-    source_text = exercise_row["source_text"]
-    mt_text = exercise_row.get("mt_text","")
-    task_type = st.radio("Task Type", ["Translate", "Post-edit MT"])
-    student_text = st.text_area("Your Submission")
 
+    source_text = exercise_row["source_text"]
+    mt_text = exercise_row.get("mt_text", "")
+
+    # Display source and MT text
+    st.subheader("Source Text")
+    st.markdown(f"<div style='font-family: Times New Roman; font-size:14px'>{source_text}</div>", unsafe_allow_html=True)
+    if mt_text:
+        st.subheader("Machine Translation Output (optional)")
+        st.markdown(f"<div style='font-family: Times New Roman; font-size:14px'>{mt_text}</div>", unsafe_allow_html=True)
+
+    # Task type
+    task_type = "Translate" if not mt_text else st.radio("Task Type", ["Translate", "Post-edit MT"])
+    initial_text = "" if task_type == "Translate" else mt_text
+    student_text = st.text_area("Your Submission", value=initial_text, height=250)
+
+    # Timer & keystrokes
     if f"start_time_{ex_id}" not in st.session_state:
         st.session_state[f"start_time_{ex_id}"] = time.time()
     if f"keystrokes_{ex_id}" not in st.session_state:
         st.session_state[f"keystrokes_{ex_id}"] = 0
 
     if st.button("Submit"):
-        if student_name and student_text:
-            time_spent = time.time() - st.session_state[f"start_time_{ex_id}"]
-            st.session_state[f"keystrokes_{ex_id}"] = len(student_text)
-            metrics = evaluate_translation(source_text, mt_text, student_text, task_type)
-            save_submission(student_name, ex_id, source_text, student_text, mt_text, task_type,
-                            metrics, time_spent, st.session_state[f"keystrokes_{ex_id}"])
-            st.success("✅ Submission saved!")
-            st.write(metrics)
+        if student_text.strip() == "":
+            st.error("Please enter your translation/post-edit.")
+            return
 
-            # Gamification
-            points = metrics['fluency']*0.3 + metrics['accuracy']*0.5 + metrics['bleu']*0.2
-            points = round(points,2)
-            st.success(f"🎯 You earned {points} points!")
-            st.progress(min(int(points), 100))
+        time_spent = time.time() - st.session_state[f"start_time_{ex_id}"]
+        st.session_state[f"keystrokes_{ex_id}"] = len(student_text)
+        metrics = evaluate_translation(source_text, mt_text, student_text, task_type)
 
-            badges = []
-            if metrics['fluency'] > 0.9: badges.append("Fluency Master")
-            if metrics['accuracy'] > 0.9: badges.append("Accuracy Ace")
-            if metrics['bleu'] > 90: badges.append("BLEU Pro")
-            if badges:
-                st.info("🏅 Badges earned: " + ", ".join(badges))
-        else:
-            st.error("Please enter your name and your translation.")
+        save_submission(student_name, ex_id, source_text, student_text, mt_text, task_type,
+                        metrics, time_spent, st.session_state[f"keystrokes_{ex_id}"])
+        st.success("✅ Submission saved!")
+        st.write(metrics)
 
-    st.info("New exercises will appear automatically when the page reloads.")
+        # Gamification
+        points = metrics['fluency']*0.3 + metrics['accuracy']*0.5 + metrics['bleu']*0.2
+        points = round(points, 2)
+        st.success(f"🎯 You earned {points} points!")
+        st.progress(min(int(points), 100))
+
+        badges = []
+        if metrics['fluency'] > 0.9: badges.append("Fluency Master")
+        if metrics['accuracy'] > 0.9: badges.append("Accuracy Ace")
+        if metrics['bleu'] > 90: badges.append("BLEU Pro")
+        if badges:
+            st.info("🏅 Badges earned: " + ", ".join(badges))
+
+    st.info("New exercises will appear automatically when the page is refreshed.")
 
 # -------------------------
 # Instructor Dashboard
