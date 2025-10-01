@@ -5,6 +5,7 @@ import time
 from difflib import SequenceMatcher
 from docx import Document
 from io import BytesIO
+import matplotlib.pyplot as plt
 
 # ---------------- Storage ----------------
 EXERCISES_FILE = "exercises.json"
@@ -23,11 +24,9 @@ def save_json(file, data):
 # ---------------- Metrics ----------------
 def evaluate_translation(st_text, mt_text, student_text, task_type):
     fluency = len(student_text.split()) / (len(st_text.split()) + 1)
-
-    # Accuracy: ST vs student translation for Translate, MT vs student for Post-edit
     reference_text = mt_text if task_type=="Post-edit MT" and mt_text else st_text
     accuracy = SequenceMatcher(None, reference_text, student_text).ratio()
-
+    
     additions = omissions = edits = 0
     if task_type=="Post-edit MT" and mt_text:
         mt_words = mt_text.split()
@@ -40,14 +39,34 @@ def evaluate_translation(st_text, mt_text, student_text, task_type):
                 omissions += (i2 - i1)
             elif tag == "replace":
                 edits += max(i2 - i1, j2 - j1)
+    
+    # Placeholder BLEU/chrF calculations
+    try:
+        bleu_score = round(accuracy*100,2)
+        chrf_score = round(accuracy*100,2)
+    except:
+        bleu_score = chrf_score = 0
 
     return {
         "fluency": round(fluency,2),
         "accuracy": round(accuracy,2),
+        "bleu": bleu_score,
+        "chrf": chrf_score,
         "additions": additions,
         "omissions": omissions,
         "edits": edits
     }
+
+# ---------------- Visualization ----------------
+def plot_metrics(metrics):
+    categories = ["Fluency","Accuracy","BLEU"]
+    values = [metrics["fluency"], metrics["accuracy"], metrics["bleu"]/100]
+    fig, ax = plt.subplots(figsize=(4,4))
+    ax.barh(categories, values, color=["skyblue","orange","green"])
+    ax.set_xlim(0,1)
+    for i,v in enumerate(values):
+        ax.text(v+0.02,i,f"{v:.2f}")
+    st.pyplot(fig)
 
 # ---------------- Word Export ----------------
 def export_submissions_word(submissions, filename="submissions.docx"):
@@ -90,7 +109,7 @@ def instructor_dashboard():
     submissions = load_json(SUBMISSIONS_FILE)
 
     st.subheader("Create New Exercise")
-    st_text = st.text_area("Source Text (You can use Markdown formatting)", height=200)
+    st_text = st.text_area("Source Text", height=200)
     mt_text = st.text_area("Machine Translation Output (optional)", height=200)
 
     if st.button("Save Exercise"):
@@ -109,16 +128,15 @@ def instructor_dashboard():
             buf = export_exercise_word(ex_id, ex)
             st.download_button(f"Exercise {ex_id} Word", buf, file_name=f"Exercise_{ex_id}.docx")
 
-    st.subheader("All Submissions")
+    st.subheader("Class Analytics")
     if submissions:
-        student_choice = st.selectbox("Choose student", ["All"] + list(submissions.keys()))
-        if st.button("Download Word for Selected Student"):
-            if student_choice == "All":
-                buf = export_submissions_word(submissions)
-                st.download_button("Download All Submissions", buf, file_name="all_submissions.docx")
-            else:
-                buf = export_submissions_word({student_choice: submissions[student_choice]})
-                st.download_button(f"Download {student_choice}'s Submissions", buf, file_name=f"{student_choice}_submissions.docx")
+        for ex_id in exercises.keys():
+            st.markdown(f"**Exercise {ex_id} Summary**")
+            metrics_list = [sub["metrics"] for student, subs in submissions.items() if ex_id in subs for sub in [subs[ex_id]]]
+            if metrics_list:
+                avg_metrics = {k:round(sum(d[k] for d in metrics_list)/len(metrics_list),2) for k in metrics_list[0].keys()}
+                st.write(avg_metrics)
+                plot_metrics(avg_metrics)
     else:
         st.info("No submissions yet.")
 
@@ -142,21 +160,14 @@ def student_dashboard():
 
     ex = exercises[ex_id]
     st.subheader("Source Text")
-    st.markdown(
-        f"<div style='font-family: Times New Roman; font-size:12pt;'>{ex['source_text']}</div>",
-        unsafe_allow_html=True
-    )
+    st.markdown(f"<div style='font-family: Times New Roman; font-size:12pt;'>{ex['source_text']}</div>", unsafe_allow_html=True)
 
     task_options = ["Translate"] if not ex.get("mt_text") else ["Translate", "Post-edit MT"]
     task_type = st.radio("Task Type", task_options)
 
     initial_text = "" if task_type=="Translate" else ex.get("mt_text","")
     st.subheader("Your Work")
-    student_text = st.text_area(
-        "Type your translation / post-edit here",
-        initial_text,
-        height=400
-    )
+    student_text = st.text_area("Type your translation / post-edit here", initial_text, height=400)
 
     # Timer & keystrokes per exercise
     if f"start_time_{ex_id}" not in st.session_state:
@@ -179,16 +190,10 @@ def student_dashboard():
         }
         save_json(SUBMISSIONS_FILE, submissions)
         st.success("Submission saved!")
+
         st.subheader("Your Metrics")
-        st.markdown(f"""
-        - **Fluency:** {metrics['fluency']}
-        - **Accuracy:** {metrics['accuracy']}
-        - **Additions:** {metrics['additions']}
-        - **Omissions:** {metrics['omissions']}
-        - **Edits:** {metrics['edits']}
-        - **Time Spent:** {round(time_spent,2)} sec
-        - **Keystrokes:** {st.session_state[f"keystrokes_{ex_id}"]}
-        """)
+        st.write(metrics)
+        plot_metrics(metrics)
 
 # ---------------- Main ----------------
 def main():
