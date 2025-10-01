@@ -6,7 +6,6 @@ from difflib import SequenceMatcher
 from io import BytesIO
 from docx import Document
 import pandas as pd
-from datetime import datetime
 
 # ---------------- Storage ----------------
 EXERCISES_FILE = "exercises.json"
@@ -47,8 +46,8 @@ def evaluate_translation(st_text, mt_text, student_text, task_type):
         "additions": additions,
         "omissions": omissions,
         "edits": edits,
-        "bleu": None,  # Placeholder
-        "chrF": None   # Placeholder
+        "bleu": None,
+        "chrF": None
     }
 
 # ---------------- Track Changes ----------------
@@ -138,18 +137,31 @@ def instructor_dashboard():
     exercises = load_json(EXERCISES_FILE)
     submissions = load_json(SUBMISSIONS_FILE)
 
-    st.subheader("Create New Exercise")
-    st_text = st.text_area("Source Text (Markdown allowed)", height=200)
-    mt_text = st.text_area("Machine Translation Output (optional)", height=200)
-
-    if st.button("Save Exercise"):
-        if st_text.strip() == "":
-            st.error("Source text is required.")
-        else:
-            next_id = str(max([int(k) for k in exercises.keys()] + [0]) + 1).zfill(3)
-            exercises[next_id] = {"source_text": st_text, "mt_text": mt_text if mt_text.strip() else None}
-            save_json(EXERCISES_FILE, exercises)
-            st.success(f"Exercise {next_id} saved!")
+    st.subheader("Manage Exercises")
+    if exercises:
+        for ex_id, ex in exercises.items():
+            st.markdown(f"**Exercise {ex_id}**")
+            col1, col2, col3 = st.columns([6,1,1])
+            with col1:
+                st.markdown(f"Source: {ex['source_text'][:100]}{'...' if len(ex['source_text'])>100 else ''}")
+            with col2:
+                if st.button(f"Edit {ex_id}"):
+                    new_source = st.text_area(f"Edit Source Text {ex_id}", ex['source_text'], key=f"src_{ex_id}")
+                    new_mt = st.text_area(f"Edit MT Text {ex_id}", ex.get("mt_text",""), key=f"mt_{ex_id}")
+                    if st.button(f"Save Edit {ex_id}"):
+                        exercises[ex_id]['source_text'] = new_source
+                        exercises[ex_id]['mt_text'] = new_mt if new_mt.strip() else None
+                        save_json(EXERCISES_FILE, exercises)
+                        st.success(f"Exercise {ex_id} updated!")
+            with col3:
+                if st.button(f"Delete {ex_id}"):
+                    del exercises[ex_id]
+                    for student in submissions:
+                        if ex_id in submissions[student]:
+                            del submissions[student][ex_id]
+                    save_json(EXERCISES_FILE, exercises)
+                    save_json(SUBMISSIONS_FILE, submissions)
+                    st.warning(f"Exercise {ex_id} deleted!")
 
     st.subheader("Student Submissions")
     if not submissions:
@@ -158,25 +170,25 @@ def instructor_dashboard():
 
     student_choice = st.selectbox("Select student", ["All"] + list(submissions.keys()))
     selected_students = [student_choice] if student_choice != "All" else submissions.keys()
+    show_full_text = st.checkbox("Show full submission text in app", value=False)
 
     rows = []
     for student in selected_students:
         st.markdown(f"### Student: {student}")
         for ex_id, sub in submissions[student].items():
             st.markdown(f"**Exercise {ex_id}**")
-            st.markdown(f"**Source:** {sub['source_text']}")
-            if sub.get("mt_text"):
-                st.markdown(f"**MT Output:** {sub['mt_text']}")
-            st.markdown(f"**Student Submission:** {sub['student_text']}")
+            if show_full_text:
+                st.markdown(f"**Source:** {sub['source_text']}")
+                if sub.get("mt_text"):
+                    st.markdown(f"**MT Output:** {sub['mt_text']}")
+                st.markdown(f"**Student Submission:** {sub['student_text']}")
             metrics = sub.get("metrics", {})
             st.markdown(f"**Metrics:** {metrics}")
 
-            # Track Changes
             if sub.get("task_type")=="Post-edit MT" and sub.get("mt_text"):
                 with st.expander("View Track Changes"):
                     st.markdown(track_changes_html(sub["mt_text"], sub["student_text"]), unsafe_allow_html=True)
 
-            # For CSV export
             rows.append({
                 "student": student,
                 "exercise_id": ex_id,
@@ -189,17 +201,61 @@ def instructor_dashboard():
                 "keystrokes": sub.get("keystrokes")
             })
 
-    # CSV download
     if rows:
         df = pd.DataFrame(rows)
         csv_data = df.to_csv(index=False).encode("utf-8")
         st.download_button("📥 Download All Submissions (CSV)", csv_data, file_name="submissions_summary.csv", mime="text/csv")
 
+        if st.button("📥 Download Word Reports"):
+            for student in selected_students:
+                doc = Document()
+                doc.add_heading(f"Student: {student}", 0)
+                for ex_id, sub in submissions[student].items():
+                    doc.add_heading(f"Exercise {ex_id}", level=1)
+                    doc.add_paragraph(f"Source Text:\n{sub['source_text']}")
+                    if sub.get("mt_text"):
+                        doc.add_paragraph(f"MT Output:\n{sub['mt_text']}")
+                    doc.add_paragraph(f"Student Submission:\n{sub['student_text']}")
+                    doc.add_paragraph(f"Metrics: {sub.get('metrics',{})}")
+                    doc.add_paragraph(f"Task Type: {sub.get('task_type','')}")
+                    doc.add_paragraph(f"Time Spent: {sub.get('time_spent_sec',0):.2f} sec")
+                    doc.add_paragraph(f"Keystrokes: {sub.get('keystrokes',0)}")
+                    doc.add_paragraph("---")
+                buf = BytesIO()
+                doc.save(buf)
+                buf.seek(0)
+                st.download_button(f"Download Word Report {student}", buf, file_name=f"{student}_report.docx")
+
+    # ---------------- Lightweight Gamification ----------------
+    with st.expander("Gamification / Points (Optional)"):
+        if rows:
+            gamification = []
+            for student in selected_students:
+                student_rows = [r for r in rows if r['student']==student]
+                total_points = 0
+                for r in student_rows:
+                    flu = r.get('fluency',0)
+                    acc = r.get('accuracy',0)
+                    points = round(((flu + acc)/2)*100)
+                    total_points += points
+                avg_points = round(total_points/len(student_rows)) if student_rows else 0
+                if avg_points >= 90:
+                    badge = "🏆 Gold"
+                elif avg_points >= 75:
+                    badge = "🥈 Silver"
+                elif avg_points >= 60:
+                    badge = "🥉 Bronze"
+                else:
+                    badge = "📝 Keep Practicing"
+                gamification.append({"student": student, "points": avg_points, "badge": badge})
+            df_gaming = pd.DataFrame(gamification)
+            st.dataframe(df_gaming.sort_values(by="points", ascending=False))
+
 # ---------------- Main ----------------
 def main():
     st.sidebar.title("Navigation")
     role = st.sidebar.radio("Login as", ["Instructor", "Student"])
-    if role=="Instructor":
+    if role == "Instructor":
         instructor_dashboard()
     else:
         student_dashboard()
