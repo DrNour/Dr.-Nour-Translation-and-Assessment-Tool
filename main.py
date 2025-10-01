@@ -1,208 +1,192 @@
 import streamlit as st
-import json
+import pandas as pd
 import os
+import io
 import time
 from difflib import SequenceMatcher
-from docx import Document
-from io import BytesIO
-import matplotlib.pyplot as plt
+from datetime import datetime
 
-# ---------------- Storage ----------------
-EXERCISES_FILE = "exercises.json"
-SUBMISSIONS_FILE = "submissions.json"
+# -------------------------
+# Directories / files
+# -------------------------
+SUBMISSIONS_DIR = "submissions"
+EXERCISES_FILE = "exercises.csv"
 
-def load_json(file):
-    if os.path.exists(file):
-        with open(file, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {}
+# -------------------------
+# Exercise helpers
+# -------------------------
+def load_exercises():
+    if os.path.exists(EXERCISES_FILE):
+        return pd.read_csv(EXERCISES_FILE)
+    return pd.DataFrame(columns=["exercise_id", "source_text", "mt_text"])
 
-def save_json(file, data):
-    with open(file, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=4, ensure_ascii=False)
+def save_exercises(df):
+    df.to_csv(EXERCISES_FILE, index=False)
 
-# ---------------- Metrics ----------------
+# -------------------------
+# Metrics helpers
+# -------------------------
 def evaluate_translation(st_text, mt_text, student_text, task_type):
     fluency = len(student_text.split()) / (len(st_text.split()) + 1)
     reference_text = mt_text if task_type=="Post-edit MT" and mt_text else st_text
     accuracy = SequenceMatcher(None, reference_text, student_text).ratio()
-    
     additions = omissions = edits = 0
     if task_type=="Post-edit MT" and mt_text:
         mt_words = mt_text.split()
         student_words = student_text.split()
         s = SequenceMatcher(None, mt_words, student_words)
         for tag, i1, i2, j1, j2 in s.get_opcodes():
-            if tag == "insert":
-                additions += (j2 - j1)
-            elif tag == "delete":
-                omissions += (i2 - i1)
-            elif tag == "replace":
-                edits += max(i2 - i1, j2 - j1)
-    
-    # Placeholder BLEU/chrF calculations
-    try:
-        bleu_score = round(accuracy*100,2)
-        chrf_score = round(accuracy*100,2)
-    except:
-        bleu_score = chrf_score = 0
+            if tag == "insert": additions += (j2-j1)
+            elif tag == "delete": omissions += (i2-i1)
+            elif tag == "replace": edits += max(i2-i1, j2-j1)
+    bleu = round(accuracy * 100, 2)
+    chrf = round(accuracy * 100, 2)
+    return {"fluency": round(fluency,2), "accuracy": round(accuracy,2),
+            "bleu": bleu, "chrF": chrf, "additions": additions,
+            "omissions": omissions, "edits": edits}
 
-    return {
-        "fluency": round(fluency,2),
-        "accuracy": round(accuracy,2),
-        "bleu": bleu_score,
-        "chrf": chrf_score,
-        "additions": additions,
-        "omissions": omissions,
-        "edits": edits
+# -------------------------
+# Submission helpers
+# -------------------------
+def save_submission(student_name, ex_id, source_text, student_text, mt_text, task_type, metrics, time_spent, keystrokes):
+    os.makedirs(SUBMISSIONS_DIR, exist_ok=True)
+    today = datetime.now().strftime("%Y-%m-%d")
+    filename = os.path.join(SUBMISSIONS_DIR, f"{today}.csv")
+    new_entry = {
+        "student": student_name,
+        "exercise_id": ex_id,
+        "source_text": source_text,
+        "mt_text": mt_text if mt_text else "",
+        "student_text": student_text,
+        "task_type": task_type,
+        "time_spent_sec": round(time_spent,2),
+        "keystrokes": keystrokes,
+        "fluency": metrics.get("fluency",0),
+        "accuracy": metrics.get("accuracy",0),
+        "bleu": metrics.get("bleu",0),
+        "chrF": metrics.get("chrF",0),
+        "additions": metrics.get("additions",0),
+        "omissions": metrics.get("omissions",0),
+        "edits": metrics.get("edits",0)
     }
-
-# ---------------- Visualization ----------------
-def plot_metrics(metrics):
-    categories = ["Fluency","Accuracy","BLEU"]
-    values = [metrics["fluency"], metrics["accuracy"], metrics["bleu"]/100]
-    fig, ax = plt.subplots(figsize=(4,4))
-    ax.barh(categories, values, color=["skyblue","orange","green"])
-    ax.set_xlim(0,1)
-    for i,v in enumerate(values):
-        ax.text(v+0.02,i,f"{v:.2f}")
-    st.pyplot(fig)
-
-# ---------------- Word Export ----------------
-def export_submissions_word(submissions, filename="submissions.docx"):
-    doc = Document()
-    doc.add_heading("Student Submissions", 0)
-    for student, subs in submissions.items():
-        doc.add_heading(f"Student: {student}", level=1)
-        for ex_id, sub in subs.items():
-            doc.add_heading(f"Exercise {ex_id}", level=2)
-            doc.add_paragraph(f"Source Text:\n{sub['source_text']}")
-            if sub.get("mt_text"):
-                doc.add_paragraph(f"MT Output:\n{sub['mt_text']}")
-            doc.add_paragraph(f"Student Submission:\n{sub['student_text']}")
-            metrics = sub.get("metrics", {})
-            doc.add_paragraph(f"Metrics: {metrics}")
-            doc.add_paragraph(f"Task Type: {sub.get('task_type','')}")
-            doc.add_paragraph(f"Time Spent: {sub.get('time_spent_sec',0):.2f} sec")
-            doc.add_paragraph(f"Keystrokes: {sub.get('keystrokes',0)}")
-            doc.add_paragraph("---")
-    buf = BytesIO()
-    doc.save(buf)
-    buf.seek(0)
-    return buf
-
-def export_exercise_word(ex_id, exercise):
-    doc = Document()
-    doc.add_heading(f"Exercise {ex_id}", 0)
-    doc.add_paragraph(f"Source Text:\n{exercise['source_text']}")
-    if exercise.get("mt_text"):
-        doc.add_paragraph(f"MT Output:\n{exercise['mt_text']}")
-    buf = BytesIO()
-    doc.save(buf)
-    buf.seek(0)
-    return buf
-
-# ---------------- Instructor ----------------
-def instructor_dashboard():
-    st.title("Instructor Dashboard")
-    exercises = load_json(EXERCISES_FILE)
-    submissions = load_json(SUBMISSIONS_FILE)
-
-    st.subheader("Create New Exercise")
-    st_text = st.text_area("Source Text", height=200)
-    mt_text = st.text_area("Machine Translation Output (optional)", height=200)
-
-    if st.button("Save Exercise"):
-        if st_text.strip() == "":
-            st.error("Source text is required.")
-        else:
-            existing_ids = [int(k) for k in exercises.keys() if k.isdigit()] if exercises else []
-            next_id = str(max(existing_ids)+1 if existing_ids else 1).zfill(3)
-            exercises[next_id] = {"source_text": st_text, "mt_text": mt_text if mt_text.strip() else None}
-            save_json(EXERCISES_FILE, exercises)
-            st.success(f"Exercise saved! ID: {next_id}")
-
-    st.subheader("Download Exercises")
-    for ex_id, ex in exercises.items():
-        if st.button(f"Download Exercise {ex_id}"):
-            buf = export_exercise_word(ex_id, ex)
-            st.download_button(f"Exercise {ex_id} Word", buf, file_name=f"Exercise_{ex_id}.docx")
-
-    st.subheader("Class Analytics")
-    if submissions:
-        for ex_id in exercises.keys():
-            st.markdown(f"**Exercise {ex_id} Summary**")
-            metrics_list = [sub["metrics"] for student, subs in submissions.items() if ex_id in subs for sub in [subs[ex_id]]]
-            if metrics_list:
-                avg_metrics = {k:round(sum(d[k] for d in metrics_list)/len(metrics_list),2) for k in metrics_list[0].keys()}
-                st.write(avg_metrics)
-                plot_metrics(avg_metrics)
+    if os.path.exists(filename):
+        df = pd.read_csv(filename)
+        df = pd.concat([df, pd.DataFrame([new_entry])], ignore_index=True)
     else:
-        st.info("No submissions yet.")
+        df = pd.DataFrame([new_entry])
+    df.to_csv(filename, index=False)
 
-# ---------------- Student ----------------
+def download_summary_excel(filename):
+    df = pd.read_csv(filename)
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+        df.to_excel(writer, sheet_name="All Submissions", index=False)
+    return output.getvalue()
+
+# -------------------------
+# Student Dashboard
+# -------------------------
 def student_dashboard():
     st.title("Student Dashboard")
-    exercises = load_json(EXERCISES_FILE)
-    submissions = load_json(SUBMISSIONS_FILE)
-
     student_name = st.text_input("Enter your name")
-    if not student_name:
-        st.warning("Please enter your name.")
-        return
-    if student_name not in submissions:
-        submissions[student_name] = {}
+    ex_df = load_exercises()
 
-    ex_id = st.selectbox("Choose Exercise", list(exercises.keys()))
-    if not ex_id:
-        st.info("No exercises available yet.")
+    if ex_df.empty:
+        st.info("No exercises available. Instructor needs to add some.")
         return
 
-    ex = exercises[ex_id]
-    st.subheader("Source Text")
-    st.markdown(f"<div style='font-family: Times New Roman; font-size:12pt;'>{ex['source_text']}</div>", unsafe_allow_html=True)
+    ex_id = st.selectbox("Select Exercise", ex_df["exercise_id"].tolist())
+    exercise_row = ex_df[ex_df["exercise_id"] == ex_id].iloc[0]
+    source_text = exercise_row["source_text"]
+    mt_text = exercise_row.get("mt_text","")
+    task_type = st.radio("Task Type", ["Translate", "Post-edit MT"])
+    student_text = st.text_area("Your Submission")
 
-    task_options = ["Translate"] if not ex.get("mt_text") else ["Translate", "Post-edit MT"]
-    task_type = st.radio("Task Type", task_options)
-
-    initial_text = "" if task_type=="Translate" else ex.get("mt_text","")
-    st.subheader("Your Work")
-    student_text = st.text_area("Type your translation / post-edit here", initial_text, height=400)
-
-    # Timer & keystrokes per exercise
     if f"start_time_{ex_id}" not in st.session_state:
         st.session_state[f"start_time_{ex_id}"] = time.time()
     if f"keystrokes_{ex_id}" not in st.session_state:
         st.session_state[f"keystrokes_{ex_id}"] = 0
 
     if st.button("Submit"):
-        time_spent = time.time() - st.session_state[f"start_time_{ex_id}"]
-        st.session_state[f"keystrokes_{ex_id}"] = len(student_text)
-        metrics = evaluate_translation(ex["source_text"], ex.get("mt_text"), student_text, task_type)
-        submissions[student_name][ex_id] = {
-            "source_text": ex["source_text"],
-            "mt_text": ex.get("mt_text"),
-            "student_text": student_text,
-            "task_type": task_type,
-            "time_spent_sec": round(time_spent,2),
-            "keystrokes": st.session_state[f"keystrokes_{ex_id}"],
-            "metrics": metrics
-        }
-        save_json(SUBMISSIONS_FILE, submissions)
-        st.success("Submission saved!")
+        if student_name and student_text:
+            time_spent = time.time() - st.session_state[f"start_time_{ex_id}"]
+            st.session_state[f"keystrokes_{ex_id}"] = len(student_text)
+            metrics = evaluate_translation(source_text, mt_text, student_text, task_type)
+            save_submission(student_name, ex_id, source_text, student_text, mt_text, task_type,
+                            metrics, time_spent, st.session_state[f"keystrokes_{ex_id}"])
+            st.success("✅ Submission saved!")
+            st.write(metrics)
+        else:
+            st.error("Please enter your name and your translation.")
 
-        st.subheader("Your Metrics")
-        st.write(metrics)
-        plot_metrics(metrics)
+# -------------------------
+# Instructor Dashboard
+# -------------------------
+def instructor_dashboard():
+    st.title("Instructor Dashboard")
+    # --- Manage exercises ---
+    st.subheader("Manage Exercises")
+    ex_df = load_exercises()
+    new_ex_id = st.text_input("Exercise ID for new exercise")
+    new_source_text = st.text_area("Source Text")
+    new_mt_text = st.text_area("MT Output (optional)")
 
-# ---------------- Main ----------------
+    if st.button("Save Exercise"):
+        if new_ex_id and new_source_text:
+            ex_df = pd.concat([ex_df, pd.DataFrame([{
+                "exercise_id": new_ex_id,
+                "source_text": new_source_text,
+                "mt_text": new_mt_text
+            }])], ignore_index=True)
+            save_exercises(ex_df)
+            st.success(f"Exercise {new_ex_id} saved!")
+        else:
+            st.error("Exercise ID and source text are required.")
+
+    if not ex_df.empty:
+        st.subheader("Existing Exercises")
+        st.dataframe(ex_df)
+
+    # --- Submissions ---
+    st.subheader("Today's Submissions")
+    today = datetime.now().strftime("%Y-%m-%d")
+    filename = os.path.join(SUBMISSIONS_DIR, f"{today}.csv")
+
+    if os.path.exists(filename):
+        df = pd.read_csv(filename)
+        st.dataframe(df)
+
+        students = df["student"].unique().tolist()
+        selected_student = st.selectbox("Select student to download", students)
+        student_df = df[df["student"] == selected_student]
+        st.download_button(
+            label=f"📥 Download {selected_student}'s submissions (CSV)",
+            data=student_df.to_csv(index=False).encode("utf-8"),
+            file_name=f"{selected_student}_submissions_{today}.csv",
+            mime="text/csv"
+        )
+
+        # Download full Excel summary
+        excel_file = download_summary_excel(filename)
+        st.download_button(
+            label="📊 Download All Submissions + Metrics (Excel)",
+            data=excel_file,
+            file_name=f"submissions_summary_{today}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+    else:
+        st.warning("No submissions found for today.")
+
+# -------------------------
+# Main
+# -------------------------
 def main():
     st.sidebar.title("Navigation")
-    role = st.sidebar.radio("Login as", ["Instructor", "Student"])
-    if role == "Instructor":
-        instructor_dashboard()
-    else:
+    role = st.sidebar.radio("Login as", ["Student", "Instructor"])
+    if role == "Student":
         student_dashboard()
+    else:
+        instructor_dashboard()
 
 if __name__=="__main__":
     main()
