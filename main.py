@@ -76,21 +76,18 @@ def save_submission(student_name, ex_id, source_text, student_text, mt_text, tas
         df = pd.DataFrame([new_entry])
     df.to_csv(filename, index=False)
 
-def download_summary_excel(filename):
-    df = pd.read_csv(filename)
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-        df.to_excel(writer, sheet_name="All Submissions", index=False)
-    return output.getvalue()
-
 # -------------------------
 # Student Dashboard
 # -------------------------
 def student_dashboard():
     st.title("Student Dashboard")
     student_name = st.text_input("Enter your name")
-    ex_df = load_exercises()
+    if not student_name:
+        st.warning("Please enter your name.")
+        return
 
+    # Always load exercises fresh
+    ex_df = load_exercises()
     if ex_df.empty:
         st.info("No exercises available. Instructor needs to add some.")
         return
@@ -132,6 +129,10 @@ def student_dashboard():
                 st.info("🏅 Badges earned: " + ", ".join(badges))
         else:
             st.error("Please enter your name and your translation.")
+
+    # Optional: reload exercises manually
+    if st.button("Reload Exercises"):
+        st.experimental_rerun()
 
 # -------------------------
 # Instructor Dashboard
@@ -180,13 +181,12 @@ def instructor_dashboard():
             mime="text/csv"
         )
 
-        # Download full Excel summary
-        excel_file = download_summary_excel(filename)
+        # Download full CSV summary
         st.download_button(
-            label="📊 Download All Submissions + Metrics (Excel)",
-            data=excel_file,
-            file_name=f"submissions_summary_{today}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            label="📊 Download All Submissions + Metrics (CSV)",
+            data=df.to_csv(index=False).encode("utf-8"),
+            file_name=f"submissions_summary_{today}.csv",
+            mime="text/csv"
         )
     else:
         st.warning("No submissions found for today.")
