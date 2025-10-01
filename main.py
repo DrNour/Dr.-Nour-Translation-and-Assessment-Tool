@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import os
-import io
 import time
 from difflib import SequenceMatcher
 from datetime import datetime
@@ -86,7 +85,7 @@ def student_dashboard():
         st.warning("Please enter your name.")
         return
 
-    # Always load exercises fresh
+    # Load exercises fresh every time
     ex_df = load_exercises()
     if ex_df.empty:
         st.info("No exercises available. Instructor needs to add some.")
@@ -114,11 +113,10 @@ def student_dashboard():
             st.success("✅ Submission saved!")
             st.write(metrics)
 
-            # --- Gamification ---
+            # Gamification
             points = metrics['fluency']*0.3 + metrics['accuracy']*0.5 + metrics['bleu']*0.2
             points = round(points,2)
             st.success(f"🎯 You earned {points} points!")
-
             st.progress(min(int(points), 100))
 
             badges = []
@@ -130,16 +128,14 @@ def student_dashboard():
         else:
             st.error("Please enter your name and your translation.")
 
-    # Optional: reload exercises manually
-    if st.button("Reload Exercises"):
-        st.experimental_rerun()
+    st.info("New exercises will appear automatically when the page reloads.")
 
 # -------------------------
 # Instructor Dashboard
 # -------------------------
 def instructor_dashboard():
     st.title("Instructor Dashboard")
-    # --- Manage exercises ---
+    # Manage exercises
     st.subheader("Manage Exercises")
     ex_df = load_exercises()
     new_ex_id = st.text_input("Exercise ID for new exercise")
@@ -162,7 +158,7 @@ def instructor_dashboard():
         st.subheader("Existing Exercises")
         st.dataframe(ex_df)
 
-    # --- Submissions ---
+    # Submissions
     st.subheader("Today's Submissions")
     today = datetime.now().strftime("%Y-%m-%d")
     filename = os.path.join(SUBMISSIONS_DIR, f"{today}.csv")
@@ -181,7 +177,7 @@ def instructor_dashboard():
             mime="text/csv"
         )
 
-        # Download full CSV summary
+        # Full CSV summary
         st.download_button(
             label="📊 Download All Submissions + Metrics (CSV)",
             data=df.to_csv(index=False).encode("utf-8"),
@@ -189,7 +185,7 @@ def instructor_dashboard():
             mime="text/csv"
         )
 
-        # --- Leaderboard ---
+        # Leaderboard
         st.subheader("🏆 Leaderboard - Today")
         df['points'] = df['fluency']*0.3 + df['accuracy']*0.5 + df['bleu']*0.2
         leaderboard = df.groupby('student')['points'].sum().reset_index()
