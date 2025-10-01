@@ -188,6 +188,14 @@ def instructor_dashboard():
             file_name=f"submissions_summary_{today}.csv",
             mime="text/csv"
         )
+
+        # --- Leaderboard ---
+        st.subheader("🏆 Leaderboard - Today")
+        df['points'] = df['fluency']*0.3 + df['accuracy']*0.5 + df['bleu']*0.2
+        leaderboard = df.groupby('student')['points'].sum().reset_index()
+        leaderboard = leaderboard.sort_values(by='points', ascending=False)
+        st.table(leaderboard)
+
     else:
         st.warning("No submissions found for today.")
 
