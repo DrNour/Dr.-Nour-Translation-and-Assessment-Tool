@@ -116,6 +116,20 @@ def student_dashboard():
                             metrics, time_spent, st.session_state[f"keystrokes_{ex_id}"])
             st.success("✅ Submission saved!")
             st.write(metrics)
+
+            # --- Gamification ---
+            points = metrics['fluency']*0.3 + metrics['accuracy']*0.5 + metrics['bleu']*0.2
+            points = round(points,2)
+            st.success(f"🎯 You earned {points} points!")
+
+            st.progress(min(int(points), 100))
+
+            badges = []
+            if metrics['fluency'] > 0.9: badges.append("Fluency Master")
+            if metrics['accuracy'] > 0.9: badges.append("Accuracy Ace")
+            if metrics['bleu'] > 90: badges.append("BLEU Pro")
+            if badges:
+                st.info("🏅 Badges earned: " + ", ".join(badges))
         else:
             st.error("Please enter your name and your translation.")
 
