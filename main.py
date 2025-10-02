@@ -55,7 +55,7 @@ def evaluate_translation(st_text, student_text, reference=None):
         "chrF": round(chrf,2) if chrf is not None else None
     }
 
-# Track changes
+# Track changes highlighting
 def diff_text(original, edited):
     differ = ndiff(original.split(), edited.split())
     result = []
@@ -135,11 +135,14 @@ def instructor_dashboard():
         # Show metrics
         ref = exercises.get(assignment_choice, {}).get("reference")
         metrics = evaluate_translation(data["source_text"], data["student_translation"], ref)
+        submissions[student_choice][assignment_choice]["metrics"] = metrics
+        save_json(submissions, SUBMISSIONS_FILE)
+
         st.write("### Metrics")
         st.write(metrics)
 
         # Instructor post-editing
-        instructor_edit = st.text_area("✏️ Instructor Post-Editing", data["student_translation"])
+        instructor_edit = st.text_area("✏️ Instructor Post-Editing", data.get("post_editing", data["student_translation"]))
         if st.button("Save Post-Editing"):
             submissions[student_choice][assignment_choice]["post_editing"] = instructor_edit
             submissions[student_choice][assignment_choice]["diff"] = diff_text(
@@ -148,11 +151,18 @@ def instructor_dashboard():
             save_json(submissions, SUBMISSIONS_FILE)
             st.success("✅ Post-editing saved!")
 
-        if "post_editing" in data:
+        # Show track changes if exists
+        if "post_editing" in submissions[student_choice][assignment_choice]:
+            if "diff" not in submissions[student_choice][assignment_choice]:
+                submissions[student_choice][assignment_choice]["diff"] = diff_text(
+                    data["student_translation"], submissions[student_choice][assignment_choice]["post_editing"]
+                )
+                save_json(submissions, SUBMISSIONS_FILE)
+
             st.write("### Instructor Post-Editing")
-            st.write(data["post_editing"])
+            st.write(submissions[student_choice][assignment_choice]["post_editing"])
             st.write("### Track Changes")
-            st.markdown(data["diff"], unsafe_allow_html=True)
+            st.markdown(submissions[student_choice][assignment_choice]["diff"], unsafe_allow_html=True)
 
             # Export Word
             doc = Document()
@@ -216,12 +226,32 @@ def student_dashboard():
             "source_text": exercises[assignment]["source_text"],
             "student_translation": translation
         }
+
+        # Compute metrics
+        ref = exercises[assignment].get("reference")
+        metrics = evaluate_translation(exercises[assignment]["source_text"], translation, ref)
+        submissions[student_name][assignment]["metrics"] = metrics
+
+        # Track changes
+        submissions[student_name][assignment]["diff"] = diff_text(
+            exercises[assignment]["source_text"], translation
+        )
+
         save_json(submissions, SUBMISSIONS_FILE)
 
         # Award points
         points[student_name] = points.get(student_name, 0) + 10
         save_json(points, POINTS_FILE)
+
         st.success("✅ Translation submitted! You earned 10 points.")
+
+        # Show metrics
+        st.write("### Your Metrics")
+        st.write(metrics)
+
+        # Show track changes
+        st.write("### Track Changes")
+        st.markdown(submissions[student_name][assignment]["diff"], unsafe_allow_html=True)
 
 # ----------------------------
 # Main
