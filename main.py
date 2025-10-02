@@ -3,35 +3,29 @@ import json
 import os
 import time
 from difflib import SequenceMatcher, ndiff
-from io import BytesIO
 from docx import Document
-import pandas as pd
+from io import BytesIO
 
-# ----------------------------
-# File paths
-# ----------------------------
+# ---------------- Storage ----------------
 EXERCISES_FILE = "exercises.json"
 SUBMISSIONS_FILE = "submissions.json"
-POINTS_FILE = "points.json"
 
-# ----------------------------
-# Helpers
-# ----------------------------
-def load_json(file, default={}):
+def load_json(file):
     if os.path.exists(file):
         with open(file, "r", encoding="utf-8") as f:
             return json.load(f)
-    return default
+    return {}
 
-def save_json(data, file):
+def save_json(file, data):
     with open(file, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+        json.dump(data, f, indent=4, ensure_ascii=False)
 
-# Metrics calculation
+# ---------------- Metrics ----------------
 def evaluate_translation(baseline_text, student_text, reference=None):
+    # Fluency reference-free
     fluency = len(student_text.split()) / (len(baseline_text.split()) + 1)
-    accuracy = SequenceMatcher(None, baseline_text, student_text).ratio()
 
+    # Track additions, deletions, edits
     additions = deletions = edits = 0
     sm = SequenceMatcher(None, baseline_text.split(), student_text.split())
     for tag, i1, i2, j1, j2 in sm.get_opcodes():
@@ -42,8 +36,9 @@ def evaluate_translation(baseline_text, student_text, reference=None):
         elif tag == "replace":
             edits += max(i2 - i1, j2 - j1)
 
-    bleu = chrf = None
+    # Compute accuracy, BLEU, chrF only if reference exists
     if reference:
+        accuracy = SequenceMatcher(None, reference, student_text).ratio()
         ref_words = reference.split()
         student_words = student_text.split()
         matches = sum(1 for w in student_words if w in ref_words)
@@ -55,10 +50,12 @@ def evaluate_translation(baseline_text, student_text, reference=None):
         precision = common / (len(student_chars)+1)
         recall = common / (len(ref_chars)+1)
         chrf = 2*precision*recall / (precision+recall+1e-6)
+    else:
+        accuracy = bleu = chrf = None
 
     return {
         "fluency": round(fluency,2),
-        "accuracy": round(accuracy,2),
+        "accuracy": round(accuracy,2) if accuracy is not None else None,
         "bleu": round(bleu,2) if bleu is not None else None,
         "chrF": round(chrf,2) if chrf is not None else None,
         "additions": additions,
@@ -66,228 +63,176 @@ def evaluate_translation(baseline_text, student_text, reference=None):
         "edits": edits
     }
 
-# Track changes highlighting
+# ---------------- Track changes ----------------
 def diff_text(baseline, student_text):
     differ = ndiff(baseline.split(), student_text.split())
     result = []
     for w in differ:
         if w.startswith("- "):
+            # deletions strikethrough
             result.append(f"~~{w[2:]}~~")
         elif w.startswith("+ "):
-            result.append(f"**{w[2:]}**")
+            # insertions in red
+            result.append(f"<span style='color:red;'>{w[2:]}</span>")
         else:
             result.append(w[2:])
     return " ".join(result)
 
-# ----------------------------
-# Load Data
-# ----------------------------
-exercises = load_json(EXERCISES_FILE)
-submissions = load_json(SUBMISSIONS_FILE)
-points = load_json(POINTS_FILE)
-
-# ----------------------------
-# Word export
-# ----------------------------
-def export_student_word(student_name, student_data):
+# ---------------- Word Export ----------------
+def export_submissions_word(submissions, filename="submissions.docx"):
     doc = Document()
-    doc.add_heading(f"Student: {student_name}", level=1)
-    for ex_id, sub in student_data.items():
-        doc.add_heading(f"Exercise: {ex_id}", level=2)
-        doc.add_heading("Source Text", level=3)
-        doc.add_paragraph(sub["source_text"])
-        doc.add_heading("Student Translation / Post-edit", level=3)
-        doc.add_paragraph(sub.get("student_translation",""))
-        doc.add_heading("Metrics", level=3)
-        doc.add_paragraph(str(sub.get("metrics",{})))
-        doc.add_heading("Track Changes", level=3)
-        doc.add_paragraph(sub.get("diff",""))
+    doc.add_heading("Student Submissions", 0)
+    for student, subs in submissions.items():
+        doc.add_heading(f"Student: {student}", level=1)
+        for ex_id, sub in subs.items():
+            doc.add_heading(f"Exercise {ex_id}", level=2)
+            doc.add_paragraph(f"Source Text:\n{sub['source_text']}")
+            if sub.get("mt_text"):
+                doc.add_paragraph(f"MT Output:\n{sub['mt_text']}")
+            doc.add_paragraph(f"Student Submission:\n{sub['student_text']}")
+            metrics = sub.get("metrics", {})
+            doc.add_paragraph(f"Metrics: {metrics}")
+            doc.add_paragraph(f"Task Type: {sub.get('task_type','')}")
+            doc.add_paragraph(f"Time Spent: {sub.get('time_spent_sec',0):.2f} sec")
+            doc.add_paragraph(f"Keystrokes: {sub.get('keystrokes',0)}")
+            doc.add_paragraph("---")
     buf = BytesIO()
     doc.save(buf)
     buf.seek(0)
     return buf
 
-# ----------------------------
-# Excel summary
-# ----------------------------
-def export_summary_excel(submissions):
-    rows = []
-    for student, data in submissions.items():
-        for ex_id, sub in data.items():
-            metrics = sub.get("metrics", {})
-            rows.append({
-                "Student": student,
-                "Exercise": ex_id,
-                "Fluency": metrics.get("fluency"),
-                "Accuracy": metrics.get("accuracy"),
-                "Additions": metrics.get("additions"),
-                "Deletions": metrics.get("deletions"),
-                "Edits": metrics.get("edits"),
-                "BLEU": metrics.get("bleu"),
-                "chrF": metrics.get("chrF")
-            })
-    df = pd.DataFrame(rows)
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-        df.to_excel(writer, index=False, sheet_name="Summary")
-    output.seek(0)
-    return output
+def export_exercise_word(ex_id, exercise):
+    doc = Document()
+    doc.add_heading(f"Exercise {ex_id}", 0)
+    doc.add_paragraph(f"Source Text:\n{exercise['source_text']}")
+    if exercise.get("mt_text"):
+        doc.add_paragraph(f"MT Output:\n{exercise['mt_text']}")
+    buf = BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    return buf
 
-# ----------------------------
-# Leaderboard
-# ----------------------------
-def show_leaderboard():
-    st.subheader("🏆 Leaderboard")
-    if points:
-        df_points = pd.DataFrame([{"Student": s, "Points": p} for s, p in points.items()])
-        df_points = df_points.sort_values("Points", ascending=False)
-        st.table(df_points)
-    else:
-        st.info("No points yet.")
-
-# ----------------------------
-# Instructor Dashboard
-# ----------------------------
+# ---------------- Instructor ----------------
 def instructor_dashboard():
-    st.sidebar.subheader("Instructor Panel")
-    choice = st.sidebar.radio("Menu", ["Manage Exercises", "Review Submissions", "Export", "Leaderboard"])
+    st.title("Instructor Dashboard")
+    exercises = load_json(EXERCISES_FILE)
+    submissions = load_json(SUBMISSIONS_FILE)
 
-    if choice == "Manage Exercises":
-        st.title("📘 Manage Exercises")
-        with st.form("exercise_form"):
-            title = st.text_input("Exercise Title")
-            source_text = st.text_area("Source Text")
-            reference_translation = st.text_area("Reference Translation (optional)")
-            mt_text = st.text_area("Machine Translation Output (optional)")
-            submitted = st.form_submit_button("Save Exercise")
-        if submitted and title.strip():
-            exercises[title] = {"source_text": source_text, "reference": reference_translation, "mt_text": mt_text}
-            save_json(exercises, EXERCISES_FILE)
-            st.success(f"Exercise '{title}' saved!")
+    st.subheader("Create / Edit Exercise")
+    st_text = st.text_area("Source Text", height=200)
+    mt_text = st.text_area("Machine Translation Output (optional)", height=200)
 
-        if exercises:
-            st.subheader("Existing Exercises")
-            for ex in list(exercises.keys()):
-                with st.expander(ex):
-                    data = exercises[ex]
-                    new_source = st.text_area("Edit Source Text", data["source_text"], key=ex+"src")
-                    new_reference = st.text_area("Edit Reference Translation", data.get("reference",""), key=ex+"ref")
-                    new_mt = st.text_area("Edit MT Output", data.get("mt_text",""), key=ex+"mt")
-                    if st.button("Save Changes", key=ex+"save"):
-                        exercises[ex] = {"source_text": new_source, "reference": new_reference, "mt_text": new_mt}
-                        save_json(exercises, EXERCISES_FILE)
-                        st.success(f"Exercise '{ex}' updated!")
-                    if st.button("❌ Delete Exercise", key=ex+"del"):
-                        del exercises[ex]
-                        save_json(EXERCISES_FILE, EXERCISES_FILE)
-                        st.warning(f"Exercise '{ex}' deleted.")
-                        st.experimental_rerun()
+    selected_ex = st.selectbox("Select Exercise to Edit", ["New"] + list(exercises.keys()))
+    if selected_ex != "New":
+        st_text = exercises[selected_ex]["source_text"]
+        mt_text = exercises[selected_ex].get("mt_text","")
 
-    elif choice == "Review Submissions":
-        st.title("📑 Review Submissions")
-        if not submissions:
-            st.info("No submissions yet.")
-            return
-        student_choice = st.selectbox("Choose a student", list(submissions.keys()))
-        student_data = submissions[student_choice]
-        for ex_id, sub in student_data.items():
-            with st.expander(ex_id):
-                st.write("### Source Text")
-                st.info(sub["source_text"])
-                
-                st.write("### Student Translation / Post-edit")
-                st.text_area("Student Work", value=sub.get("student_translation",""), height=150)
-                
-                # Show all metrics including additions/deletions/edits
-                st.write("### Metrics")
-                metrics = sub.get("metrics", {})
-                st.write({
-                    "Fluency": metrics.get("fluency"),
-                    "Accuracy": metrics.get("accuracy"),
-                    "Additions": metrics.get("additions"),
-                    "Deletions": metrics.get("deletions"),
-                    "Edits": metrics.get("edits"),
-                    "BLEU": metrics.get("bleu"),
-                    "chrF": metrics.get("chrF")
-                })
-                
-                st.write("### Track Changes")
-                diff_html = sub.get("diff","")
-                if diff_html:
-                    st.markdown(diff_html, unsafe_allow_html=True)
-                
-                # Optional instructor post-editing
-                instructor_edit = st.text_area("Instructor Post-Editing", value=sub.get("post_editing",sub.get("student_translation","")), height=150)
-                if st.button("Save Post-Editing", key=ex_id+"edit"):
-                    sub["post_editing"] = instructor_edit
-                    sub["diff"] = diff_text(sub.get("mt_text",sub.get("student_translation","")), instructor_edit)
-                    save_json(submissions, SUBMISSIONS_FILE)
-                    st.success("✅ Post-edit saved and diff updated!")
-
-    elif choice == "Export":
-        st.title("💾 Export Submissions")
-        student_choice = st.selectbox("Select Student for Word Export", ["All"] + list(submissions.keys()))
-        if st.button("Export Word"):
-            if student_choice=="All":
-                for s, data in submissions.items():
-                    buf = export_student_word(s, data)
-                    st.download_button(f"Download {s}.docx", buf, file_name=f"{s}.docx")
+    if st.button("Save Exercise"):
+        if st_text.strip() == "":
+            st.error("Source text is required.")
+        else:
+            if selected_ex=="New":
+                existing_ids = [int(k) for k in exercises.keys() if k.isdigit()] if exercises else []
+                next_id = str(max(existing_ids)+1 if existing_ids else 1).zfill(3)
             else:
-                buf = export_student_word(student_choice, submissions[student_choice])
-                st.download_button(f"Download {student_choice}.docx", buf, file_name=f"{student_choice}.docx")
-        if st.button("Export Summary Excel"):
-            buf = export_summary_excel(submissions)
-            st.download_button("Download Summary.xlsx", buf, file_name="summary.xlsx")
+                next_id = selected_ex
+            exercises[next_id] = {"source_text": st_text, "mt_text": mt_text if mt_text.strip() else None}
+            save_json(EXERCISES_FILE, exercises)
+            st.success(f"Exercise saved! ID: {next_id}")
 
-    elif choice == "Leaderboard":
-        st.title("📊 Leaderboard")
-        show_leaderboard()
+    st.subheader("Download Exercises")
+    for ex_id, ex in exercises.items():
+        if st.button(f"Download Exercise {ex_id}"):
+            buf = export_exercise_word(ex_id, ex)
+            st.download_button(f"Exercise {ex_id} Word", buf, file_name=f"Exercise_{ex_id}.docx")
 
-# ----------------------------
-# Student Dashboard
-# ----------------------------
+    st.subheader("All Submissions")
+    if submissions:
+        student_choice = st.selectbox("Choose student", ["All"] + list(submissions.keys()))
+        if st.button("Download Word for Selected Student"):
+            if student_choice == "All":
+                buf = export_submissions_word(submissions)
+                st.download_button("Download All Submissions", buf, file_name="all_submissions.docx")
+            else:
+                buf = export_submissions_word({student_choice: submissions[student_choice]})
+                st.download_button(f"Download {student_choice}'s Submissions", buf, file_name=f"{student_choice}_submissions.docx")
+    else:
+        st.info("No submissions yet.")
+
+# ---------------- Student ----------------
 def student_dashboard():
-    st.sidebar.subheader("Student Panel")
-    student_name = st.sidebar.text_input("Enter your name")
+    st.title("Student Dashboard")
+    exercises = load_json(EXERCISES_FILE)
+    submissions = load_json(SUBMISSIONS_FILE)
+
+    student_name = st.text_input("Enter your name")
     if not student_name:
         st.warning("Please enter your name.")
         return
-    if not exercises:
+    if student_name not in submissions:
+        submissions[student_name] = {}
+
+    ex_id = st.selectbox("Choose Exercise", list(exercises.keys()))
+    if not ex_id:
         st.info("No exercises available yet.")
         return
-    assignment = st.selectbox("Choose an exercise", list(exercises.keys()))
-    st.write("### Source Text")
-    st.info(exercises[assignment]["source_text"])
-    baseline = exercises[assignment].get("mt_text","")
-    translation = st.text_area("✍️ Your Translation / Post-edit", value=baseline)
-    if st.button("Submit Translation"):
-        if student_name not in submissions:
-            submissions[student_name] = {}
-        submissions[student_name][assignment] = {
-            "source_text": exercises[assignment]["source_text"],
-            "student_translation": translation
-        }
-        ref = exercises[assignment].get("reference")
-        metrics = evaluate_translation(baseline, translation, ref)
-        submissions[student_name][assignment]["metrics"] = metrics
-        submissions[student_name][assignment]["diff"] = diff_text(baseline, translation)
-        save_json(submissions, SUBMISSIONS_FILE)
-        points[student_name] = points.get(student_name,0)+10
-        save_json(points, POINTS_FILE)
-        st.success(f"✅ Translation submitted! You earned 10 points.")
-        st.write("### Metrics")
-        st.write(metrics)
-        st.write("### Track Changes")
-        st.markdown(submissions[student_name][assignment]["diff"], unsafe_allow_html=True)
-        show_leaderboard()
 
-# ----------------------------
-# Main
-# ----------------------------
+    ex = exercises[ex_id]
+    st.subheader("Source Text")
+    st.markdown(f"<div style='font-family: Times New Roman; font-size:12pt;'>{ex['source_text']}</div>", unsafe_allow_html=True)
+
+    task_options = ["Translate"] if not ex.get("mt_text") else ["Translate", "Post-edit MT"]
+    task_type = st.radio("Task Type", task_options)
+
+    initial_text = "" if task_type=="Translate" else ex.get("mt_text","")
+    st.subheader("Your Work")
+    student_text = st.text_area("Type your translation / post-edit here", initial_text, height=400)
+
+    # Optional: Use MT as reference
+    use_mt_as_reference = False
+    if ex.get("mt_text"):
+        use_mt_as_reference = st.checkbox("Use MT output as reference for metrics", value=False)
+
+    # Timer & keystrokes
+    if f"start_time_{ex_id}" not in st.session_state:
+        st.session_state[f"start_time_{ex_id}"] = time.time()
+    if f"keystrokes_{ex_id}" not in st.session_state:
+        st.session_state[f"keystrokes_{ex_id}"] = 0
+
+    if st.button("Submit"):
+        time_spent = time.time() - st.session_state[f"start_time_{ex_id}"]
+        st.session_state[f"keystrokes_{ex_id}"] = len(student_text)
+
+        # Determine reference
+        reference = ex.get("reference_text") or (ex.get("mt_text") if use_mt_as_reference else None)
+        metrics = evaluate_translation(ex["source_text"], student_text, reference)
+
+        submissions[student_name][ex_id] = {
+            "source_text": ex["source_text"],
+            "mt_text": ex.get("mt_text"),
+            "student_text": student_text,
+            "task_type": task_type,
+            "time_spent_sec": round(time_spent,2),
+            "keystrokes": st.session_state[f"keystrokes_{ex_id}"],
+            "metrics": metrics
+        }
+        save_json(SUBMISSIONS_FILE, submissions)
+
+        st.success("Submission saved!")
+
+        st.subheader("Your Metrics")
+        metric_lines = [f"- **{k}:** {v}" for k,v in metrics.items()]
+        st.markdown("\n".join(metric_lines))
+
+        st.subheader("Track Changes")
+        highlighted = diff_text(ex.get("mt_text","") if task_type=="Post-edit MT" else "", student_text)
+        st.markdown(highlighted, unsafe_allow_html=True)
+
+# ---------------- Main ----------------
 def main():
-    st.sidebar.title("Translation & Assessment Tool")
-    role = st.sidebar.radio("Login as", ["Student", "Instructor"])
-    if role=="Instructor":
+    st.sidebar.title("Navigation")
+    role = st.sidebar.radio("Login as", ["Instructor", "Student"])
+    if role == "Instructor":
         instructor_dashboard()
     else:
         student_dashboard()
