@@ -96,7 +96,7 @@ def export_student_word(student_name, student_data):
         doc.add_heading(f"Exercise: {ex_id}", level=2)
         doc.add_heading("Source Text", level=3)
         doc.add_paragraph(sub["source_text"])
-        doc.add_heading("Student Translation", level=3)
+        doc.add_heading("Student Translation / Post-edit", level=3)
         doc.add_paragraph(sub.get("student_translation",""))
         doc.add_heading("Metrics", level=3)
         doc.add_paragraph(str(sub.get("metrics",{})))
@@ -179,7 +179,7 @@ def instructor_dashboard():
                         st.success(f"Exercise '{ex}' updated!")
                     if st.button("❌ Delete Exercise", key=ex+"del"):
                         del exercises[ex]
-                        save_json(exercises, EXERCISES_FILE)
+                        save_json(EXERCISES_FILE, EXERCISES_FILE)
                         st.warning(f"Exercise '{ex}' deleted.")
                         st.experimental_rerun()
 
@@ -194,18 +194,35 @@ def instructor_dashboard():
             with st.expander(ex_id):
                 st.write("### Source Text")
                 st.info(sub["source_text"])
-                st.write("### Student Translation")
-                st.write(sub.get("student_translation",""))
+                
+                st.write("### Student Translation / Post-edit")
+                st.text_area("Student Work", value=sub.get("student_translation",""), height=150)
+                
+                # Show all metrics including additions/deletions/edits
                 st.write("### Metrics")
-                st.write(sub.get("metrics",{}))
+                metrics = sub.get("metrics", {})
+                st.write({
+                    "Fluency": metrics.get("fluency"),
+                    "Accuracy": metrics.get("accuracy"),
+                    "Additions": metrics.get("additions"),
+                    "Deletions": metrics.get("deletions"),
+                    "Edits": metrics.get("edits"),
+                    "BLEU": metrics.get("bleu"),
+                    "chrF": metrics.get("chrF")
+                })
+                
                 st.write("### Track Changes")
-                st.markdown(sub.get("diff",""), unsafe_allow_html=True)
-                instructor_edit = st.text_area("Instructor Post-Editing", value=sub.get("post_editing",sub.get("student_translation","")))
+                diff_html = sub.get("diff","")
+                if diff_html:
+                    st.markdown(diff_html, unsafe_allow_html=True)
+                
+                # Optional instructor post-editing
+                instructor_edit = st.text_area("Instructor Post-Editing", value=sub.get("post_editing",sub.get("student_translation","")), height=150)
                 if st.button("Save Post-Editing", key=ex_id+"edit"):
                     sub["post_editing"] = instructor_edit
-                    sub["diff"] = diff_text(sub.get("mt_text",sub["student_translation"]), instructor_edit)
+                    sub["diff"] = diff_text(sub.get("mt_text",sub.get("student_translation","")), instructor_edit)
                     save_json(submissions, SUBMISSIONS_FILE)
-                    st.success("✅ Saved!")
+                    st.success("✅ Post-edit saved and diff updated!")
 
     elif choice == "Export":
         st.title("💾 Export Submissions")
