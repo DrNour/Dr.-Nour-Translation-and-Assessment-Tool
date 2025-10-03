@@ -7,11 +7,12 @@ from docx import Document
 from docx.shared import RGBColor
 from io import BytesIO
 import pandas as pd
+import random
 
 # ---------------- Storage ----------------
 EXERCISES_FILE = "exercises.json"
 SUBMISSIONS_FILE = "submissions.json"
-SCORES_FILE = "scores.json"
+LEADERBOARD_FILE = "leaderboard.json"
 
 def load_json(file):
     if os.path.exists(file):
@@ -99,9 +100,13 @@ def export_student_word(submissions, student_name):
         doc.add_heading(f"Exercise {ex_id}", level=1)
         doc.add_paragraph(f"Source Text:\n{sub['source_text']}")
         if sub.get("mt_text"): doc.add_paragraph(f"MT Output:\n{sub['mt_text']}")
-        doc.add_paragraph("Student Submission (Track Changes):")
-        base = sub.get("mt_text","") if sub["task_type"]=="Post-edit MT" else ""
-        add_diff_to_doc(doc, base, sub["student_text"])
+        if sub["task_type"]=="Post-edit MT":
+            doc.add_paragraph("Student Submission (Track Changes):")
+            base = sub.get("mt_text","")
+            add_diff_to_doc(doc, base, sub["student_text"])
+        else:
+            doc.add_paragraph("Student Submission:")
+            doc.add_paragraph(sub["student_text"])
         metrics = sub.get("metrics",{})
         doc.add_paragraph(f"Metrics: {metrics}")
         doc.add_paragraph(f"Task Type: {sub.get('task_type','')}")
@@ -139,32 +144,32 @@ def export_summary_excel(submissions):
     buf.seek(0)
     return buf
 
-# ---------------- Gamification / AI Suggestions ----------------
-def calculate_points(metrics):
-    points = 0
-    if metrics.get("fluency"): points += int(metrics["fluency"]*10)
-    if metrics.get("accuracy"): points += int(metrics["accuracy"]*10)
-    if metrics.get("bleu"): points += int(metrics["bleu"]*10)
-    return points
+# ---------------- Gamification ----------------
+def update_leaderboard(student_name, points):
+    leaderboard = load_json(LEADERBOARD_FILE)
+    leaderboard[student_name] = leaderboard.get(student_name,0)+points
+    save_json(LEADERBOARD_FILE, leaderboard)
 
-def generate_ai_exercise(student_text, metrics):
-    suggestions = []
-    if metrics.get("additions",0) > 3:
-        suggestions.append("Focus on concise translation; try reducing unnecessary additions.")
-    if metrics.get("deletions",0) > 3:
-        suggestions.append("Review your post-editing to avoid omitting key words.")
-    if metrics.get("fluency",0) < 0.7:
-        suggestions.append("Practice sentence restructuring to improve fluency.")
-    if metrics.get("accuracy",0) and metrics["accuracy"] < 0.7:
-        suggestions.append("Try matching the machine/reference translation more closely.")
-    return suggestions
+def show_leaderboard():
+    leaderboard = load_json(LEADERBOARD_FILE)
+    if leaderboard:
+        st.subheader("Leaderboard (Top 5)")
+        top5 = sorted(leaderboard.items(), key=lambda x:x[1], reverse=True)[:5]
+        for i, (name, pts) in enumerate(top5,1):
+            st.write(f"{i}. {name}: {pts} points")
+    else:
+        st.info("No leaderboard data yet.")
 
 # ---------------- Instructor ----------------
 def instructor_dashboard():
     st.title("Instructor Dashboard")
+    password = st.text_input("Enter instructor password", type="password")
+    if password!="admin123":
+        st.warning("Incorrect password. Access denied.")
+        return
+
     exercises = load_json(EXERCISES_FILE)
     submissions = load_json(SUBMISSIONS_FILE)
-    scores = load_json(SCORES_FILE)
 
     st.subheader("Create / Edit / Delete Exercise")
     ex_ids = ["New"] + list(exercises.keys())
@@ -174,7 +179,7 @@ def instructor_dashboard():
     if selected_ex!="New":
         st_text = exercises[selected_ex]["source_text"]
         mt_text = exercises[selected_ex].get("mt_text","")
-    col1,col2 = st.columns(2)
+    col1,col2,col3 = st.columns(3)
     with col1:
         if st.button("Save Exercise"):
             next_id = str(max([int(k) for k in exercises.keys()]+[0])+1).zfill(3) if selected_ex=="New" else selected_ex
@@ -186,6 +191,15 @@ def instructor_dashboard():
             exercises.pop(selected_ex)
             save_json(EXERCISES_FILE, exercises)
             st.success(f"Exercise {selected_ex} deleted!")
+    with col3:
+        if st.button("Generate AI Exercise"):
+            # Simple random example exercise generation
+            new_text = f"This is AI generated exercise {random.randint(1,1000)}."
+            new_mt = f"AI MT output for exercise {random.randint(1,1000)}."
+            next_id = str(max([int(k) for k in exercises.keys()]+[0])+1).zfill(3)
+            exercises[next_id] = {"source_text": new_text, "mt_text": new_mt}
+            save_json(EXERCISES_FILE, exercises)
+            st.success(f"AI-generated exercise saved as ID {next_id}")
 
     st.subheader("Download Exercises")
     for ex_id, ex in exercises.items():
@@ -206,15 +220,7 @@ def instructor_dashboard():
         st.subheader("Download Metrics Summary")
         excel_buf = export_summary_excel(submissions)
         st.download_button("Download Excel Summary", excel_buf, file_name="metrics_summary.xlsx")
-
-        # Leaderboard
-        st.subheader("Leaderboard")
-        leaderboard = []
-        for student, subs in submissions.items():
-            total_points = sum(calculate_points(sub["metrics"]) for sub in subs.values())
-            leaderboard.append({"Student": student, "Points": total_points})
-        lb_df = pd.DataFrame(sorted(leaderboard, key=lambda x: x["Points"], reverse=True))
-        st.table(lb_df)
+        show_leaderboard()
     else:
         st.info("No submissions yet.")
 
@@ -256,6 +262,10 @@ def student_dashboard():
         save_json(SUBMISSIONS_FILE, submissions)
         st.success("Submission saved!")
 
+        # Assign points for gamification
+        points = int(metrics['fluency']*10 + (metrics['accuracy'] or 0)*10)
+        update_leaderboard(student_name, points)
+
         st.subheader("Your Metrics")
         st.markdown(f"""
         - **Fluency:** {metrics['fluency']}
@@ -269,18 +279,12 @@ def student_dashboard():
         - **Keystrokes:** {st.session_state[f"keystrokes_{ex_id}"]}
         """)
 
-        st.subheader("Track Changes")
-        base = ex.get("mt_text","") if task_type=="Post-edit MT" else ""
-        st.markdown(diff_text(base, student_text), unsafe_allow_html=True)
+        if task_type=="Post-edit MT":
+            st.subheader("Track Changes")
+            base = ex.get("mt_text","")
+            st.markdown(diff_text(base, student_text), unsafe_allow_html=True)
 
-        # AI Suggested Mini-Exercises
-        st.subheader("AI Suggested Mini-Exercises")
-        suggestions = generate_ai_exercise(student_text, metrics)
-        if suggestions:
-            for s in suggestions:
-                st.info(s)
-        else:
-            st.info("No suggestions. Good job!")
+        show_leaderboard()
 
 # ---------------- Main ----------------
 def main():
