@@ -11,6 +11,7 @@ import pandas as pd
 # ---------------- Storage ----------------
 EXERCISES_FILE = "exercises.json"
 SUBMISSIONS_FILE = "submissions.json"
+SCORES_FILE = "scores.json"
 
 def load_json(file):
     if os.path.exists(file):
@@ -138,11 +139,32 @@ def export_summary_excel(submissions):
     buf.seek(0)
     return buf
 
+# ---------------- Gamification / AI Suggestions ----------------
+def calculate_points(metrics):
+    points = 0
+    if metrics.get("fluency"): points += int(metrics["fluency"]*10)
+    if metrics.get("accuracy"): points += int(metrics["accuracy"]*10)
+    if metrics.get("bleu"): points += int(metrics["bleu"]*10)
+    return points
+
+def generate_ai_exercise(student_text, metrics):
+    suggestions = []
+    if metrics.get("additions",0) > 3:
+        suggestions.append("Focus on concise translation; try reducing unnecessary additions.")
+    if metrics.get("deletions",0) > 3:
+        suggestions.append("Review your post-editing to avoid omitting key words.")
+    if metrics.get("fluency",0) < 0.7:
+        suggestions.append("Practice sentence restructuring to improve fluency.")
+    if metrics.get("accuracy",0) and metrics["accuracy"] < 0.7:
+        suggestions.append("Try matching the machine/reference translation more closely.")
+    return suggestions
+
 # ---------------- Instructor ----------------
 def instructor_dashboard():
     st.title("Instructor Dashboard")
     exercises = load_json(EXERCISES_FILE)
     submissions = load_json(SUBMISSIONS_FILE)
+    scores = load_json(SCORES_FILE)
 
     st.subheader("Create / Edit / Delete Exercise")
     ex_ids = ["New"] + list(exercises.keys())
@@ -184,6 +206,15 @@ def instructor_dashboard():
         st.subheader("Download Metrics Summary")
         excel_buf = export_summary_excel(submissions)
         st.download_button("Download Excel Summary", excel_buf, file_name="metrics_summary.xlsx")
+
+        # Leaderboard
+        st.subheader("Leaderboard")
+        leaderboard = []
+        for student, subs in submissions.items():
+            total_points = sum(calculate_points(sub["metrics"]) for sub in subs.values())
+            leaderboard.append({"Student": student, "Points": total_points})
+        lb_df = pd.DataFrame(sorted(leaderboard, key=lambda x: x["Points"], reverse=True))
+        st.table(lb_df)
     else:
         st.info("No submissions yet.")
 
@@ -237,9 +268,19 @@ def student_dashboard():
         - **Time Spent:** {round(time_spent,2)} sec
         - **Keystrokes:** {st.session_state[f"keystrokes_{ex_id}"]}
         """)
+
         st.subheader("Track Changes")
         base = ex.get("mt_text","") if task_type=="Post-edit MT" else ""
         st.markdown(diff_text(base, student_text), unsafe_allow_html=True)
+
+        # AI Suggested Mini-Exercises
+        st.subheader("AI Suggested Mini-Exercises")
+        suggestions = generate_ai_exercise(student_text, metrics)
+        if suggestions:
+            for s in suggestions:
+                st.info(s)
+        else:
+            st.info("No suggestions. Good job!")
 
 # ---------------- Main ----------------
 def main():
