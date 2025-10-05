@@ -1,297 +1,222 @@
 import streamlit as st
-import json
-import os
+import difflib
 import time
-from difflib import SequenceMatcher, ndiff
-from docx import Document
-from docx.shared import RGBColor
-from io import BytesIO
 import pandas as pd
-import random
+import io
+from nltk.translate.bleu_score import sentence_bleu
+from nltk.translate.chrf_score import sentence_chrf
+from docx import Document
+from transformers import MBartForConditionalGeneration, MBart50TokenizerFast
+import torch
 
-# ---------------- Storage ----------------
-EXERCISES_FILE = "exercises.json"
-SUBMISSIONS_FILE = "submissions.json"
-LEADERBOARD_FILE = "leaderboard.json"
+# =========================
+# APP CONFIG
+# =========================
+st.set_page_config(page_title="Translation Training Tool", layout="wide")
+st.title("🎯 Translation Post-Editing & Evaluation Platform")
 
-def load_json(file):
-    if os.path.exists(file):
-        with open(file, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {}
+# =========================
+# SESSION STATES
+# =========================
+if 'submissions' not in st.session_state:
+    st.session_state['submissions'] = {}
+if 'user_role' not in st.session_state:
+    st.session_state['user_role'] = None
+if 'student_translation' not in st.session_state:
+    st.session_state['student_translation'] = ""
 
-def save_json(file, data):
-    with open(file, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=4, ensure_ascii=False)
+# =========================
+# LOGIN SYSTEM
+# =========================
+role = st.radio("Select Role:", ["Student", "Instructor"])
 
-# ---------------- Metrics ----------------
-def evaluate_translation(student_text, mt_text=None, reference=None, task_type="Translate", source_text=""):
-    fluency = len(student_text.split()) / (len(source_text.split())+1)
-    ref_text = reference if reference else (mt_text if mt_text and task_type=="Post-edit MT" else None)
-    additions = deletions = edits = 0
-
-    if task_type=="Post-edit MT" and mt_text:
-        mt_words = mt_text.split()
-        student_words = student_text.split()
-        s = SequenceMatcher(None, mt_words, student_words)
-        for tag, i1, i2, j1, j2 in s.get_opcodes():
-            if tag=="insert": additions += j2-j1
-            elif tag=="delete": deletions += i2-i1
-            elif tag=="replace": edits += max(i2-i1,j2-j1)
-
-    if ref_text:
-        accuracy = SequenceMatcher(None, ref_text, student_text).ratio()
-        ref_words = ref_text.split()
-        student_words = student_text.split()
-        matches = sum(1 for w in student_words if w in ref_words)
-        bleu = matches / (len(student_words)+1)
-        ref_chars = list(ref_text.replace(" ",""))
-        student_chars = list(student_text.replace(" ",""))
-        common = sum(1 for c in student_chars if c in ref_chars)
-        precision = common / (len(student_chars)+1)
-        recall = common / (len(ref_chars)+1)
-        chrf = 2*precision*recall / (precision+recall+1e-6)
+if role == "Instructor":
+    pwd = st.text_input("Enter instructor password:", type="password")
+    if pwd == "admin123":
+        st.session_state['user_role'] = "instructor"
     else:
-        accuracy=bleu=chrf=None
+        st.warning("Please enter the correct password.")
+elif role == "Student":
+    name = st.text_input("Enter your name:")
+    if name:
+        st.session_state['user_role'] = "student"
+        st.session_state['student_name'] = name
 
-    return {
-        "fluency": round(fluency,2),
-        "accuracy": round(accuracy,2) if accuracy is not None else None,
-        "bleu": round(bleu,2) if bleu is not None else None,
-        "chrF": round(chrf,2) if chrf is not None else None,
-        "additions": additions,
-        "deletions": deletions,
-        "edits": edits
-    }
+# Stop until role is chosen correctly
+if not st.session_state['user_role']:
+    st.stop()
 
-# ---------------- Track Changes ----------------
-def diff_text(baseline, student_text):
-    differ = ndiff(baseline.split(), student_text.split())
-    result = []
-    for w in differ:
-        if w.startswith("- "):
-            result.append(f"<span style='color:red;text-decoration:line-through'>{w[2:]}</span>")
-        elif w.startswith("+ "):
-            result.append(f"<span style='color:green;'>{w[2:]}</span>")
+# =========================
+# HELPER FUNCTIONS
+# =========================
+def compute_metrics(mt_output, student_output, reference_output=None):
+    """Compute basic text metrics."""
+    start_time = time.time()
+
+    bleu = sentence_bleu([reference_output.split()] if reference_output else [mt_output.split()],
+                         student_output.split())
+    chrf = sentence_chrf(reference_output if reference_output else mt_output, student_output)
+    fluency = round(len(student_output.split()) / max(1, len(mt_output.split())), 2)
+    accuracy = round(len(set(student_output.split()) & set(mt_output.split())) /
+                     max(1, len(set(mt_output.split()))), 2)
+
+    # diff
+    diff = list(difflib.ndiff(mt_output.split(), student_output.split()))
+    additions = sum(1 for d in diff if d.startswith('+ '))
+    deletions = sum(1 for d in diff if d.startswith('- '))
+    edits = additions + deletions
+
+    end_time = time.time()
+    duration = round(end_time - start_time, 2)
+    keystrokes = len(student_output)
+
+    return bleu, chrf, fluency, accuracy, additions, deletions, edits, duration, keystrokes
+
+def highlight_edits(old, new):
+    """Highlight only post-editing differences."""
+    old_words = old.split()
+    new_words = new.split()
+    diff = list(difflib.ndiff(old_words, new_words))
+    html = []
+    for d in diff:
+        if d.startswith('- '):
+            html.append(f"<span style='background-color:#ffcccc;text-decoration:line-through;'>{d[2:]}</span> ")
+        elif d.startswith('+ '):
+            html.append(f"<span style='background-color:#ccffcc;'>{d[2:]}</span> ")
         else:
-            result.append(w[2:])
-    return " ".join(result)
+            html.append(d[2:] + " ")
+    return ''.join(html)
 
-def add_diff_to_doc(doc, baseline, student_text):
-    differ = ndiff(baseline.split(), student_text.split())
-    p = doc.add_paragraph()
-    for w in differ:
-        if w.startswith("- "):
-            run = p.add_run(w[2:]+" ")
-            run.font.strike = True
-            run.font.color.rgb = RGBColor(255,0,0)
-        elif w.startswith("+ "):
-            run = p.add_run(w[2:]+" ")
-            run.font.color.rgb = RGBColor(0,128,0)
+# =========================
+# AI FEEDBACK MODEL
+# =========================
+@st.cache_resource
+def load_ai_model():
+    model_name = "facebook/mbart-large-50"
+    tokenizer = MBart50TokenizerFast.from_pretrained(model_name)
+    model = MBartForConditionalGeneration.from_pretrained(model_name)
+    return tokenizer, model
+
+def generate_ai_feedback(source_text, student_text, reference_text=None):
+    tokenizer, model = load_ai_model()
+    base_text = reference_text if reference_text else source_text
+    prompt = (f"Evaluate this translation quality:\n\n"
+              f"Source: {base_text}\n"
+              f"Student translation: {student_text}\n\n"
+              f"Give a short comment on fluency, accuracy, and style.")
+    inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512)
+    summary_ids = model.generate(**inputs, max_length=100, num_beams=3, early_stopping=True)
+    feedback = tokenizer.decode(summary_ids[0], skip_special_tokens=True)
+    return feedback
+
+# =========================
+# STUDENT INTERFACE
+# =========================
+if st.session_state['user_role'] == "student":
+    st.subheader("Student Workspace")
+
+    source_text = st.text_area("Source Text", height=100)
+    mt_output = st.text_area("Machine Translation Output", height=100)
+    reference_translation = st.text_area("Reference Translation (optional)", height=100)
+    student_translation = st.text_area("Post-Edited Translation", height=100)
+
+    if st.button("Submit Translation"):
+        if source_text and mt_output and student_translation:
+            bleu, chrf, fluency, accuracy, adds, dels, edits, duration, keystrokes = compute_metrics(
+                mt_output, student_translation, reference_translation)
+            st.session_state['student_translation'] = student_translation
+
+            # Track changes (visible only for editing)
+            diff_html = highlight_edits(mt_output, student_translation)
+            st.markdown("### ✏️ Track Changes View")
+            st.markdown(diff_html, unsafe_allow_html=True)
+
+            # Metrics display
+            st.write(f"**Fluency:** {fluency}")
+            st.write(f"**Accuracy:** {accuracy}")
+            st.write(f"**BLEU:** {bleu}")
+            st.write(f"**chrF:** {chrf}")
+            st.write(f"**Additions:** {adds}")
+            st.write(f"**Deletions:** {dels}")
+            st.write(f"**Edits:** {edits}")
+            st.write(f"**Time Spent:** {duration} sec")
+            st.write(f"**Keystrokes:** {keystrokes}")
+
+            # AI feedback
+            if st.button("Generate AI Feedback"):
+                with st.spinner("Generating AI feedback..."):
+                    feedback_text = generate_ai_feedback(source_text, student_translation, reference_translation)
+                st.success("AI Feedback generated successfully ✅")
+                st.write(f"**AI Comment:** {feedback_text}")
+
+            # Store submission
+            name = st.session_state['student_name']
+            st.session_state['submissions'][name] = {
+                "source": source_text,
+                "mt": mt_output,
+                "student": student_translation,
+                "reference": reference_translation,
+                "metrics": {
+                    "fluency": fluency, "accuracy": accuracy, "BLEU": bleu, "chrF": chrf,
+                    "additions": adds, "deletions": dels, "edits": edits,
+                    "duration": duration, "keystrokes": keystrokes
+                },
+                "feedback": feedback_text if 'feedback_text' in locals() else ""
+            }
         else:
-            p.add_run(w[2:]+" ")
+            st.warning("Please fill in all required fields before submitting.")
 
-# ---------------- Word Export ----------------
-def export_student_word(submissions, student_name):
-    doc = Document()
-    doc.add_heading(f"Student: {student_name}",0)
-    subs = submissions.get(student_name,{})
-    for ex_id, sub in subs.items():
-        doc.add_heading(f"Exercise {ex_id}", level=1)
-        doc.add_paragraph(f"Source Text:\n{sub['source_text']}")
-        if sub.get("mt_text"): doc.add_paragraph(f"MT Output:\n{sub['mt_text']}")
-        if sub["task_type"]=="Post-edit MT":
-            doc.add_paragraph("Student Submission (Track Changes):")
-            base = sub.get("mt_text","")
-            add_diff_to_doc(doc, base, sub["student_text"])
-        else:
-            doc.add_paragraph("Student Submission:")
-            doc.add_paragraph(sub["student_text"])
-        metrics = sub.get("metrics",{})
-        doc.add_paragraph(f"Metrics: {metrics}")
-        doc.add_paragraph(f"Task Type: {sub.get('task_type','')}")
-        doc.add_paragraph(f"Time Spent: {sub.get('time_spent_sec',0):.2f} sec")
-        doc.add_paragraph(f"Keystrokes: {sub.get('keystrokes',0)}")
-        doc.add_paragraph("---")
-    buf = BytesIO()
-    doc.save(buf)
-    buf.seek(0)
-    return buf
+# =========================
+# INSTRUCTOR INTERFACE
+# =========================
+elif st.session_state['user_role'] == "instructor":
+    st.subheader("Instructor Dashboard")
 
-# ---------------- Excel Summary Export ----------------
-def export_summary_excel(submissions):
-    rows = []
-    for student, subs in submissions.items():
-        for ex_id, sub in subs.items():
-            metrics = sub.get("metrics",{})
-            rows.append({
-                "Student": student,
-                "Exercise": ex_id,
-                "Task Type": sub.get("task_type",""),
-                "Fluency": metrics.get("fluency"),
-                "Accuracy": metrics.get("accuracy"),
-                "BLEU": metrics.get("bleu"),
-                "chrF": metrics.get("chrF"),
-                "Additions": metrics.get("additions"),
-                "Deletions": metrics.get("deletions"),
-                "Edits": metrics.get("edits"),
-                "Time Spent (s)": sub.get("time_spent_sec",0),
-                "Keystrokes": sub.get("keystrokes",0)
-            })
-    df = pd.DataFrame(rows)
-    buf = BytesIO()
-    df.to_excel(buf, index=False)
-    buf.seek(0)
-    return buf
-
-# ---------------- Gamification ----------------
-def update_leaderboard(student_name, points):
-    leaderboard = load_json(LEADERBOARD_FILE)
-    leaderboard[student_name] = leaderboard.get(student_name,0)+points
-    save_json(LEADERBOARD_FILE, leaderboard)
-
-def show_leaderboard():
-    leaderboard = load_json(LEADERBOARD_FILE)
-    if leaderboard:
-        st.subheader("Leaderboard (Top 5)")
-        top5 = sorted(leaderboard.items(), key=lambda x:x[1], reverse=True)[:5]
-        for i, (name, pts) in enumerate(top5,1):
-            st.write(f"{i}. {name}: {pts} points")
+    if not st.session_state['submissions']:
+        st.info("No student submissions yet.")
     else:
-        st.info("No leaderboard data yet.")
+        student_names = list(st.session_state['submissions'].keys())
+        selected_student = st.selectbox("Select a student:", student_names)
 
-# ---------------- Instructor ----------------
-def instructor_dashboard():
-    st.title("Instructor Dashboard")
-    password = st.text_input("Enter instructor password", type="password")
-    if password!="admin123":
-        st.warning("Incorrect password. Access denied.")
-        return
+        data = st.session_state['submissions'][selected_student]
+        st.write("### Source Text")
+        st.write(data['source'])
+        st.write("### MT Output")
+        st.write(data['mt'])
+        st.write("### Student Translation")
+        st.write(data['student'])
 
-    exercises = load_json(EXERCISES_FILE)
-    submissions = load_json(SUBMISSIONS_FILE)
+        st.markdown("### 🔍 Post-Editing Changes")
+        diff_html = highlight_edits(data['mt'], data['student'])
+        st.markdown(diff_html, unsafe_allow_html=True)
 
-    st.subheader("Create / Edit / Delete Exercise")
-    ex_ids = ["New"] + list(exercises.keys())
-    selected_ex = st.selectbox("Select Exercise", ex_ids)
-    st_text = st.text_area("Source Text", height=150)
-    mt_text = st.text_area("MT Output (optional)", height=150)
-    if selected_ex!="New":
-        st_text = exercises[selected_ex]["source_text"]
-        mt_text = exercises[selected_ex].get("mt_text","")
-    col1,col2,col3 = st.columns(3)
-    with col1:
-        if st.button("Save Exercise"):
-            next_id = str(max([int(k) for k in exercises.keys()]+[0])+1).zfill(3) if selected_ex=="New" else selected_ex
-            exercises[next_id] = {"source_text": st_text, "mt_text": mt_text if mt_text.strip() else None}
-            save_json(EXERCISES_FILE, exercises)
-            st.success(f"Exercise saved! ID: {next_id}")
-    with col2:
-        if selected_ex!="New" and st.button("Delete Exercise"):
-            exercises.pop(selected_ex)
-            save_json(EXERCISES_FILE, exercises)
-            st.success(f"Exercise {selected_ex} deleted!")
-    with col3:
-        if st.button("Generate AI Exercise"):
-            # Simple random example exercise generation
-            new_text = f"This is AI generated exercise {random.randint(1,1000)}."
-            new_mt = f"AI MT output for exercise {random.randint(1,1000)}."
-            next_id = str(max([int(k) for k in exercises.keys()]+[0])+1).zfill(3)
-            exercises[next_id] = {"source_text": new_text, "mt_text": new_mt}
-            save_json(EXERCISES_FILE, exercises)
-            st.success(f"AI-generated exercise saved as ID {next_id}")
+        st.markdown("### 📊 Metrics")
+        for k, v in data['metrics'].items():
+            st.write(f"**{k.capitalize()}:** {v}")
 
-    st.subheader("Download Exercises")
-    for ex_id, ex in exercises.items():
-        buf = BytesIO()
-        doc = Document()
-        doc.add_heading(f"Exercise {ex_id}",0)
-        doc.add_paragraph(f"Source Text:\n{ex['source_text']}")
-        if ex.get("mt_text"): doc.add_paragraph(f"MT Output:\n{ex['mt_text']}")
-        doc.save(buf); buf.seek(0)
-        st.download_button(f"Exercise {ex_id} Word", buf, file_name=f"Exercise_{ex_id}.docx")
+        if data['feedback']:
+            st.markdown("### 🤖 AI Feedback")
+            st.write(data['feedback'])
 
-    st.subheader("Student Submissions")
-    if submissions:
-        student_choice = st.selectbox("Choose student", ["All"]+list(submissions.keys()))
-        if student_choice!="All":
-            buf = export_student_word(submissions, student_choice)
-            st.download_button(f"Download {student_choice}'s Submissions", buf, file_name=f"{student_choice}_submissions.docx")
-        st.subheader("Download Metrics Summary")
-        excel_buf = export_summary_excel(submissions)
-        st.download_button("Download Excel Summary", excel_buf, file_name="metrics_summary.xlsx")
-        show_leaderboard()
-    else:
-        st.info("No submissions yet.")
+        # Export to Word
+        if st.button("Download Student Report"):
+            doc = Document()
+            doc.add_heading(f"Report for {selected_student}", level=1)
+            doc.add_paragraph(f"Source Text:\n{data['source']}")
+            doc.add_paragraph(f"Machine Translation:\n{data['mt']}")
+            doc.add_paragraph(f"Student Translation:\n{data['student']}")
+            doc.add_heading("Metrics", level=2)
+            for k, v in data['metrics'].items():
+                doc.add_paragraph(f"{k}: {v}")
+            doc.add_heading("AI Feedback", level=2)
+            doc.add_paragraph(data['feedback'])
 
-# ---------------- Student ----------------
-def student_dashboard():
-    st.title("Student Dashboard")
-    exercises = load_json(EXERCISES_FILE)
-    submissions = load_json(SUBMISSIONS_FILE)
-    student_name = st.text_input("Enter your name")
-    if not student_name: return
-    if student_name not in submissions: submissions[student_name]={}
-
-    ex_id = st.selectbox("Choose Exercise", list(exercises.keys()))
-    if not ex_id: return
-    ex = exercises[ex_id]
-    st.subheader("Source Text")
-    st.markdown(f"<div style='font-family:Times New Roman;font-size:12pt;'>{ex['source_text']}</div>", unsafe_allow_html=True)
-    task_options = ["Translate"] if not ex.get("mt_text") else ["Translate","Post-edit MT"]
-    task_type = st.radio("Task Type", task_options)
-    initial_text = "" if task_type=="Translate" else ex.get("mt_text","")
-    student_text = st.text_area("Type your translation / post-edit here", initial_text, height=300)
-
-    if f"start_time_{ex_id}" not in st.session_state: st.session_state[f"start_time_{ex_id}"]=time.time()
-    if f"keystrokes_{ex_id}" not in st.session_state: st.session_state[f"keystrokes_{ex_id}"]=0
-
-    if st.button("Submit"):
-        time_spent = time.time() - st.session_state[f"start_time_{ex_id}"]
-        st.session_state[f"keystrokes_{ex_id}"]=len(student_text)
-        metrics = evaluate_translation(student_text, mt_text=ex.get("mt_text"), reference=None, task_type=task_type, source_text=ex["source_text"])
-        submissions[student_name][ex_id] = {
-            "source_text": ex["source_text"],
-            "mt_text": ex.get("mt_text"),
-            "student_text": student_text,
-            "task_type": task_type,
-            "time_spent_sec": round(time_spent,2),
-            "keystrokes": st.session_state[f"keystrokes_{ex_id}"],
-            "metrics": metrics
-        }
-        save_json(SUBMISSIONS_FILE, submissions)
-        st.success("Submission saved!")
-
-        # Assign points for gamification
-        points = int(metrics['fluency']*10 + (metrics['accuracy'] or 0)*10)
-        update_leaderboard(student_name, points)
-
-        st.subheader("Your Metrics")
-        st.markdown(f"""
-        - **Fluency:** {metrics['fluency']}
-        - **Accuracy:** {metrics['accuracy']}
-        - **BLEU:** {metrics['bleu']}
-        - **chrF:** {metrics['chrF']}
-        - **Additions:** {metrics['additions']}
-        - **Deletions:** {metrics['deletions']}
-        - **Edits:** {metrics['edits']}
-        - **Time Spent:** {round(time_spent,2)} sec
-        - **Keystrokes:** {st.session_state[f"keystrokes_{ex_id}"]}
-        """)
-
-        if task_type=="Post-edit MT":
-            st.subheader("Track Changes")
-            base = ex.get("mt_text","")
-            st.markdown(diff_text(base, student_text), unsafe_allow_html=True)
-
-        show_leaderboard()
-
-# ---------------- Main ----------------
-def main():
-    st.sidebar.title("Navigation")
-    role = st.sidebar.radio("Login as", ["Instructor","Student"])
-    if role=="Instructor": instructor_dashboard()
-    else: student_dashboard()
-
-if __name__=="__main__":
-    main()
+            buffer = io.BytesIO()
+            doc.save(buffer)
+            buffer.seek(0)
+            st.download_button(
+                label="Download as Word",
+                data=buffer,
+                file_name=f"{selected_student}_report.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            )
