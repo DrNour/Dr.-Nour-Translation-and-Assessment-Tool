@@ -1,335 +1,483 @@
+# app.py (improved)
+# ---------------------------------
+# EduTransAI - Translation Comparison & Student Assessment
+# This version adds: robust normalization, stronger hybrid metric (cosine+CHRF/BLEU with length penalty),
+# safer/faster embedding cache, clearer token-level diffs, adaptive thresholds, and lighter UI rendering.
+
 import streamlit as st
-import json
-import os
-import time
-from difflib import SequenceMatcher, ndiff
-from docx import Document
-from docx.shared import RGBColor
-from io import BytesIO
 import pandas as pd
-import random
+import numpy as np
+import re
+import unicodedata
+from difflib import SequenceMatcher
+from hashlib import blake2b
+from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
+from sentence_transformers import SentenceTransformer
+import matplotlib.pyplot as plt
+import seaborn as sns
+from docx import Document
 
-# ---------------- Storage ----------------
-EXERCISES_FILE = "exercises.json"
-SUBMISSIONS_FILE = "submissions.json"
-LEADERBOARD_FILE = "leaderboard.json"
+# Optional lexical metric: sacrebleu CHRF (preferred)
+try:
+    from sacrebleu.metrics import CHRF
+    _CHRF = CHRF(word_order=0)
+except Exception:
+    _CHRF = None
 
-def load_json(file):
-    if os.path.exists(file):
-        with open(file, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {}
+# ===========================
+# Streamlit page config
+# ===========================
+st.set_page_config(page_title="EduTransAI - Translation Assessment", layout="wide")
+st.title("📊 EduTransAI - Translation Comparison & Student Assessment")
 
-def save_json(file, data):
-    with open(file, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=4, ensure_ascii=False)
+# ===========================
+# Sidebar controls
+# ===========================
+with st.sidebar:
+    st.header("⚙️ Settings")
+    model_name = st.selectbox(
+        "Embedding model",
+        options=[
+            "all-MiniLM-L6-v2",
+            "paraphrase-multilingual-MiniLM-L12-v2",  # better cross-lingual
+        ],
+        index=0,
+        help="Choose a multilingual model if your data spans languages.",
+    )
+    semantic_weight = st.slider("Semantic weight (cosine)", 0.0, 1.0, 0.65, 0.05)
+    lexical_weight = 1.0 - semantic_weight
+    use_chrf = st.checkbox(
+        "Use CHRF for lexical overlap (fallback to BLEU if unavailable)",
+        value=True,
+    )
 
-# ---------------- Accurate edit helper (NEW, safe) ----------------
-def compute_edit_details(mt_text, student_text):
-    """
-    Returns (additions, deletions, total_edits)
-    where total_edits = additions + deletions + replacements (replacements counted as single edits).
-    """
-    if not mt_text or not student_text:
-        return 0, 0, 0
+# ===========================
+# Load model (cached per model name)
+# ===========================
+@st.cache_resource(show_spinner=True)
+def load_model(name: str):
+    return SentenceTransformer(name)
 
-    mt_tokens = mt_text.split()
-    st_tokens = student_text.split()
-    matcher = SequenceMatcher(None, mt_tokens, st_tokens)
+model = load_model(model_name)
 
-    additions = deletions = replacements = 0
-    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
-        if tag == "insert":
-            additions += (j2 - j1)
-        elif tag == "delete":
-            deletions += (i2 - i1)
+# ===========================
+# Helper functions
+# ===========================
+word_or_punct = re.compile(r"[A-Za-zÀ-ÖØ-öø-ÿ0-9]+|[^\w\s]", re.UNICODE)
+
+
+def normalize_text(t: str) -> str:
+    t = unicodedata.normalize("NFKC", str(t)).strip().lower()
+    t = re.sub(r"[“”]", '"', t)
+    t = re.sub(r"[‘’]", "'", t)
+    t = re.sub(r"\s+", " ", t)
+    return t
+
+
+def simple_tokenize(text: str):
+    return word_or_punct.findall(text)
+
+
+def text_key(t: str) -> str:
+    return blake2b(t.encode("utf-8"), digest_size=12).hexdigest()
+
+
+@st.cache_data(show_spinner=False)
+def batch_encode_unique(texts: list[str], model_name_for_cache: str):
+    # cache also depends on model name
+    vecs = load_model(model_name_for_cache).encode(
+        texts,
+        batch_size=128,
+        show_progress_bar=False,
+        normalize_embeddings=True,  # unit vectors -> dot is cosine
+    )
+    return {text_key(t): v for t, v in zip(texts, vecs)}
+
+
+def get_vec(t: str, cache: dict):
+    return cache.get(text_key(t))
+
+
+def chrf_score(ref: str, hyp: str) -> float:
+    if _CHRF is None:
+        raise NameError("CHRF not available")
+    return _CHRF.sentence_score(hyp, [ref]).score / 100.0  # 0..1
+
+
+def length_ratio_penalty(ref: str, hyp: str) -> float:
+    r = max(1e-6, len(hyp.split())) / max(1e-6, len(ref.split()))
+    return float(np.exp(-abs(np.log(r))))  # 1.0 when equal; ~0.61 at 2x or 0.5x
+
+
+def semantic_accuracy_score(ref: str, hyp: str, embed_cache: dict,
+                            w_sem: float, w_lex: float, prefer_chrf: bool):
+    ref_n, hyp_n = normalize_text(ref), normalize_text(hyp)
+    v_ref, v_hyp = get_vec(ref_n, embed_cache), get_vec(hyp_n, embed_cache)
+    cosine = float(np.dot(v_ref, v_hyp)) if (v_ref is not None and v_hyp is not None) else 0.0
+
+    lexical = 0.0
+    used_metric = "BLEU"
+    if prefer_chrf and _CHRF is not None:
+        lexical = chrf_score(ref_n, hyp_n)
+        used_metric = "CHRF"
+    else:
+        lexical = float(
+            sentence_bleu([simple_tokenize(ref_n)], simple_tokenize(hyp_n),
+                           smoothing_function=SmoothingFunction().method4)
+        )
+    penalty = length_ratio_penalty(ref_n, hyp_n)
+    hybrid = np.clip(w_sem * cosine + w_lex * lexical, 0, 1) * penalty
+    return round(cosine, 3), used_metric, round(lexical, 3), round(hybrid, 3)
+
+
+def fluency_score(text: str) -> float:
+    t = normalize_text(text)
+    if not t:
+        return 1.0
+    tokens = t.split()
+    long_token_ratio = sum(len(w) > 24 for w in tokens) / max(1, len(tokens))
+    punct_endings = len(re.findall(r"[.!?]", t))
+    sentences = max(1, punct_endings)
+    avg_sent_len = len(tokens) / sentences
+    repeats = len(re.findall(r"([!?.,])\1{1,}", t))
+    weird_ws = 1 if re.search(r"\s{2,}", t) else 0
+
+    score = 5.0
+    score -= min(2.0, abs(avg_sent_len - 18) / 18) * 1.0
+    score -= long_token_ratio * 2.0
+    score -= repeats * 0.3
+    score -= weird_ws * 0.5
+    return round(float(np.clip(score, 1.0, 5.0)), 2)
+
+
+def token_diff(a: str, b: str) -> str:
+    a_t, b_t = a.split(), b.split()
+    sm = SequenceMatcher(None, a_t, b_t)
+    parts = []
+    for tag, i1, i2, j1, j2 in sm.get_opcodes():
+        if tag == "equal":
+            parts.extend(b_t[j1:j2])
         elif tag == "replace":
-            # count replacements as single edits (best approximation)
-            replacements += max(i2 - i1, j2 - j1)
+            if i1 != i2:
+                parts.append(f"<span style='background:#ffe6e6;text-decoration:line-through'>{' '.join(a_t[i1:i2])}</span>")
+            if j1 != j2:
+                parts.append(f"<span style='background:#e6ffe6;'>{' '.join(b_t[j1:j2])}</span>")
+        elif tag == "delete":
+            parts.append(f"<span style='background:#ffe6e6;text-decoration:line-through'>{' '.join(a_t[i1:i2])}</span>")
+        elif tag == "insert":
+            parts.append(f"<span style='background:#e6ffe6;'>{' '.join(b_t[j1:j2])}</span>")
+    return " ".join(parts)
 
-    total_edits = additions + deletions + replacements
-    return additions, deletions, total_edits
 
-# ---------------- Metrics ----------------
-def evaluate_translation(student_text, mt_text=None, reference=None, task_type="Translate", source_text=""):
-    fluency = len(student_text.split()) / (len(source_text.split())+1)
-    ref_text = reference if reference else (mt_text if mt_text and task_type=="Post-edit MT" else None)
+def dynamic_thresholds(ref_len_tokens: int):
+    acc = 0.60
+    lex = 0.50
+    if ref_len_tokens >= 25:
+        acc -= 0.05; lex -= 0.05
+    elif ref_len_tokens <= 6:
+        acc += 0.05; lex += 0.05
+    return acc, lex
 
-    # Use the new helper to compute additions/deletions/edits (only for post-edit)
-    if task_type=="Post-edit MT" and mt_text:
-        additions, deletions, edits = compute_edit_details(mt_text, student_text)
-    else:
-        additions = deletions = edits = 0
 
-    if ref_text:
-        accuracy = SequenceMatcher(None, ref_text, student_text).ratio()
-        ref_words = ref_text.split()
-        student_words = student_text.split()
-        matches = sum(1 for w in student_words if w in ref_words)
-        bleu = matches / (len(student_words)+1)
-        ref_chars = list(ref_text.replace(" ",""))
-        student_chars = list(student_text.replace(" ",""))
-        common = sum(1 for c in student_chars if c in ref_chars)
-        precision = common / (len(student_chars)+1)
-        recall = common / (len(ref_chars)+1)
-        chrf = 2*precision*recall / (precision+recall+1e-6)
-    else:
-        accuracy=bleu=chrf=None
+# ===========================
+# File upload
+# ===========================
+uploaded_file = st.file_uploader(
+    "Upload CSV, Excel, or Word file (translations)",
+    type=["csv", "xlsx", "xls", "docx"]
+)
 
-    return {
-        "fluency": round(fluency,2),
-        "accuracy": round(accuracy,2) if accuracy is not None else None,
-        "bleu": round(bleu,2) if bleu is not None else None,
-        "chrF": round(chrf,2) if chrf is not None else None,
-        "additions": additions,
-        "deletions": deletions,
-        "edits": edits
-    }
-
-# ---------------- Track Changes ----------------
-def diff_text(baseline, student_text):
-    differ = ndiff(baseline.split(), student_text.split())
-    result = []
-    for w in differ:
-        if w.startswith("- "):
-            result.append(f"<span style='color:red;text-decoration:line-through'>{w[2:]}</span>")
-        elif w.startswith("+ "):
-            result.append(f"<span style='color:green;'>{w[2:]}</span>")
-        else:
-            result.append(w[2:])
-    return " ".join(result)
-
-def add_diff_to_doc(doc, baseline, student_text):
-    differ = ndiff(baseline.split(), student_text.split())
-    p = doc.add_paragraph()
-    for w in differ:
-        if w.startswith("- "):
-            run = p.add_run(w[2:]+" ")
-            run.font.strike = True
-            run.font.color.rgb = RGBColor(255,0,0)
-        elif w.startswith("+ "):
-            run = p.add_run(w[2:]+" ")
-            run.font.color.rgb = RGBColor(0,128,0)
-        else:
-            p.add_run(w[2:]+" ")
-
-# ---------------- Word Export ----------------
-def export_student_word(submissions, student_name):
-    doc = Document()
-    doc.add_heading(f"Student: {student_name}",0)
-    subs = submissions.get(student_name,{})
-    for ex_id, sub in subs.items():
-        doc.add_heading(f"Exercise {ex_id}", level=1)
-        doc.add_paragraph(f"Source Text:\n{sub['source_text']}")
-        if sub.get("mt_text"): doc.add_paragraph(f"MT Output:\n{sub['mt_text']}")
-        if sub["task_type"]=="Post-edit MT":
-            doc.add_paragraph("Student Submission (Track Changes):")
-            base = sub.get("mt_text","")
-            add_diff_to_doc(doc, base, sub["student_text"])
-        else:
-            doc.add_paragraph("Student Submission:")
-            doc.add_paragraph(sub["student_text"])
-        metrics = sub.get("metrics",{})
-        doc.add_paragraph(f"Metrics: {metrics}")
-        doc.add_paragraph(f"Task Type: {sub.get('task_type','')}")
-        doc.add_paragraph(f"Time Spent: {sub.get('time_spent_sec',0):.2f} sec")
-        doc.add_paragraph(f"Keystrokes: {sub.get('keystrokes',0)}")
-        doc.add_paragraph("---")
-    buf = BytesIO()
-    doc.save(buf)
-    buf.seek(0)
-    return buf
-
-# ---------------- Excel Summary Export ----------------
-def export_summary_excel(submissions):
-    rows = []
-    for student, subs in submissions.items():
-        for ex_id, sub in subs.items():
-            metrics = sub.get("metrics",{})
-            rows.append({
-                "Student": student,
-                "Exercise": ex_id,
-                "Task Type": sub.get("task_type",""),
-                "Fluency": metrics.get("fluency"),
-                "Accuracy": metrics.get("accuracy"),
-                "BLEU": metrics.get("bleu"),
-                "chrF": metrics.get("chrF"),
-                "Additions": metrics.get("additions"),
-                "Deletions": metrics.get("deletions"),
-                "Edits": metrics.get("edits"),
-                "Time Spent (s)": sub.get("time_spent_sec",0),
-                "Keystrokes": sub.get("keystrokes",0)
-            })
-    df = pd.DataFrame(rows)
-    buf = BytesIO()
-    df.to_excel(buf, index=False)
-    buf.seek(0)
-    return buf
-
-# ---------------- Gamification ----------------
-def update_leaderboard(student_name, points):
-    leaderboard = load_json(LEADERBOARD_FILE)
-    leaderboard[student_name] = leaderboard.get(student_name,0)+points
-    save_json(LEADERBOARD_FILE, leaderboard)
-
-def show_leaderboard():
-    leaderboard = load_json(LEADERBOARD_FILE)
-    if leaderboard:
-        st.subheader("Leaderboard (Top 5)")
-        top5 = sorted(leaderboard.items(), key=lambda x:x[1], reverse=True)[:5]
-        for i, (name, pts) in enumerate(top5,1):
-            st.write(f"{i}. {name}: {pts} points")
-    else:
-        st.info("No leaderboard data yet.")
-
-# ---------------- Optional Hugging Face Text Generator ----------------
-def ai_generate_text(prompt):
-    HF_TOKEN = ""  # 🔒 Leave empty unless you want to activate it later.
-    if not HF_TOKEN:
-        return None  # Safe fallback
+if uploaded_file:
     try:
-        headers = {"Authorization": f"Bearer {HF_TOKEN}"}
-        payload = {"inputs": prompt}
-        response = requests.post("https://api-inference.huggingface.co/models/gpt2", headers=headers, json=payload)
-        if response.status_code == 200:
-            return response.json()[0]["generated_text"]
-    except Exception:
-        pass
-    return None
+        # ---------------------------
+        # Read file content
+        # ---------------------------
+        if uploaded_file.name.endswith(".csv"):
+            df = pd.read_csv(uploaded_file, encoding="utf-8", na_filter=False)
+        elif uploaded_file.name.endswith((".xlsx", ".xls")):
+            df = pd.read_excel(uploaded_file, na_filter=False)
+        elif uploaded_file.name.endswith(".docx"):
+            doc = Document(uploaded_file)
+            paragraphs = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
+            df = pd.DataFrame({"Text": paragraphs})
+        else:
+            st.error("Unsupported file type.")
+            st.stop()
 
-# ---------------- Instructor ----------------
-def instructor_dashboard():
-    st.title("Instructor Dashboard")
-    password = st.text_input("Enter instructor password", type="password")
-    if password!="admin123":
-        st.warning("Incorrect password. Access denied.")
-        return
+        df.columns = df.columns.str.strip().fillna("Unnamed")
+        df = df.fillna("")
 
-    exercises = load_json(EXERCISES_FILE)
-    submissions = load_json(SUBMISSIONS_FILE)
+        st.subheader("Preview of Uploaded Data")
+        st.dataframe(df.head())
 
-    st.subheader("Create / Edit / Delete Exercise")
-    ex_ids = ["New"] + list(exercises.keys())
-    selected_ex = st.selectbox("Select Exercise", ex_ids)
-    st_text = st.text_area("Source Text", height=150)
-    mt_text = st.text_area("MT Output (optional)", height=150)
-    if selected_ex!="New":
-        st_text = exercises[selected_ex]["source_text"]
-        mt_text = exercises[selected_ex].get("mt_text","")
-    col1,col2,col3 = st.columns(3)
-    with col1:
-        if st.button("Save Exercise"):
-            next_id = str(max([int(k) for k in exercises.keys()]+[0])+1).zfill(3) if selected_ex=="New" else selected_ex
-            exercises[next_id] = {"source_text": st_text, "mt_text": mt_text if mt_text.strip() else None}
-            save_json(EXERCISES_FILE, exercises)
-            st.success(f"Exercise saved! ID: {next_id}")
-    with col2:
-        if selected_ex!="New" and st.button("Delete Exercise"):
-            exercises.pop(selected_ex)
-            save_json(EXERCISES_FILE, exercises)
-            st.success(f"Exercise {selected_ex} deleted!")
-    with col3:
-        if st.button("Generate AI Exercise"):
-            prompt = "Write a short culturally rich text for translation students."
-            ai_text = ai_generate_text(prompt)
-            new_text = ai_text if ai_text else f"This is AI generated exercise {random.randint(1,1000)}."
-            new_mt = f"MT output for exercise {random.randint(1,1000)}."
-            next_id = str(max([int(k) for k in exercises.keys()]+[0])+1).zfill(3)
-            exercises[next_id] = {"source_text": new_text, "mt_text": new_mt}
-            save_json(EXERCISES_FILE, exercises)
-            st.success(f"Exercise saved as ID {next_id}")
+        # Keep a normalized copy for scoring; keep originals for display/export
+        df_norm = df.applymap(normalize_text)
 
-    st.subheader("Download Exercises")
-    for ex_id, ex in exercises.items():
-        buf = BytesIO()
-        doc = Document()
-        doc.add_heading(f"Exercise {ex_id}",0)
-        doc.add_paragraph(f"Source Text:\n{ex['source_text']}")
-        if ex.get("mt_text"): doc.add_paragraph(f"MT Output:\n{ex['mt_text']}")
-        doc.save(buf); buf.seek(0)
-        st.download_button(f"Exercise {ex_id} Word", buf, file_name=f"Exercise_{ex_id}.docx")
+        # ---------------------------
+        # Assessment mode
+        # ---------------------------
+        mode = st.radio(
+            "Select assessment mode:",
+            ["Reference-based", "Pairwise Comparison", "Standalone Student Assessment"],
+        )
+        source_col = None
+        translation_cols = None
+        if mode == "Reference-based" and len(df.columns) > 1:
+            source_col = st.selectbox("Reference / Source Column", df.columns)
+            translation_cols = st.multiselect(
+                "Translations / Student Submissions",
+                [c for c in df.columns if c != source_col],
+            )
+            if not translation_cols:
+                st.warning("Select at least one translation column.")
+        else:
+            translation_cols = st.multiselect("Translations / Student Submissions", df.columns)
+            if not translation_cols:
+                st.warning("Select at least one translation column.")
 
-    st.subheader("Student Submissions")
-    if submissions:
-        student_choice = st.selectbox("Choose student", ["All"]+list(submissions.keys()))
-        if student_choice!="All":
-            buf = export_student_word(submissions, student_choice)
-            st.download_button(f"Download {student_choice}'s Submissions", buf, file_name=f"{student_choice}_submissions.docx")
-        st.subheader("Download Metrics Summary")
-        excel_buf = export_summary_excel(submissions)
-        st.download_button("Download Excel Summary", excel_buf, file_name="metrics_summary.xlsx")
-        show_leaderboard()
-    else:
-        st.info("No submissions yet.")
+        if translation_cols and st.button("Run Analysis"):
+            st.subheader("✅ Analysis Results")
+            results = []
 
-# ---------------- Student ----------------
-def student_dashboard():
-    st.title("Student Dashboard")
-    exercises = load_json(EXERCISES_FILE)
-    submissions = load_json(SUBMISSIONS_FILE)
-    student_name = st.text_input("Enter your name")
-    if not student_name: return
-    if student_name not in submissions: submissions[student_name]={}
+            # ---------------------------
+            # Precompute embeddings in batch (on normalized texts)
+            # ---------------------------
+            all_texts = []
+            if source_col:
+                all_texts.extend(df_norm[source_col].astype(str).tolist())
+            for c in translation_cols:
+                all_texts.extend(df_norm[c].astype(str).tolist())
+            all_texts = list({t for t in all_texts if t.strip()})
+            embed_cache = batch_encode_unique(all_texts, model_name)
 
-    ex_id = st.selectbox("Choose Exercise", list(exercises.keys()))
-    if not ex_id: return
-    ex = exercises[ex_id]
-    st.subheader("Source Text")
-    st.markdown(f"<div style='font-family:Times New Roman;font-size:12pt;'>{ex['source_text']}</div>", unsafe_allow_html=True)
-    task_options = ["Translate"] if not ex.get("mt_text") else ["Translate","Post-edit MT"]
-    task_type = st.radio("Task Type", task_options)
-    initial_text = "" if task_type=="Translate" else ex.get("mt_text","")
-    student_text = st.text_area("Type your translation / post-edit here", initial_text, height=300)
+            # Reference lengths for adaptive thresholds
+            ref_lens = None
+            if mode == "Reference-based" and source_col:
+                ref_lens = df_norm[source_col].apply(lambda t: len(str(t).split())).tolist()
 
-    if f"start_time_{ex_id}" not in st.session_state: st.session_state[f"start_time_{ex_id}"]=time.time()
-    if f"keystrokes_{ex_id}" not in st.session_state: st.session_state[f"keystrokes_{ex_id}"]=0
+            # ---------------------------
+            # Analyze each row
+            # ---------------------------
+            for idx, row in df.iterrows():
+                row_result = {}
+                for t_col in translation_cols:
+                    trans_text = str(row[t_col])
+                    trans_text_norm = str(df_norm.iloc[idx][t_col])
 
-    if st.button("Submit"):
-        time_spent = time.time() - st.session_state[f"start_time_{ex_id}"]
-        st.session_state[f"keystrokes_{ex_id}"]=len(student_text)
-        metrics = evaluate_translation(student_text, mt_text=ex.get("mt_text"), reference=None, task_type=task_type, source_text=ex["source_text"])
-        submissions[student_name][ex_id] = {
-            "source_text": ex["source_text"],
-            "mt_text": ex.get("mt_text"),
-            "student_text": student_text,
-            "task_type": task_type,
-            "time_spent_sec": round(time_spent,2),
-            "keystrokes": st.session_state[f"keystrokes_{ex_id}"],
-            "metrics": metrics
-        }
-        save_json(SUBMISSIONS_FILE, submissions)
-        st.success("Submission saved!")
+                    if source_col and mode == "Reference-based":
+                        source_text = str(row[source_col])
+                        source_text_norm = str(df_norm.iloc[idx][source_col])
+                        cosine_sim, used_metric, lexical, hybrid = semantic_accuracy_score(
+                            source_text_norm,
+                            trans_text_norm,
+                            embed_cache,
+                            semantic_weight,
+                            lexical_weight,
+                            prefer_chrf=use_chrf,
+                        )
+                        flu = fluency_score(trans_text)
 
-        # Assign points for gamification
-        points = int(metrics['fluency']*10 + (metrics['accuracy'] or 0)*10)
-        update_leaderboard(student_name, points)
+                        # Adaptive thresholds
+                        acc_thr, lex_thr = dynamic_thresholds(ref_lens[idx])
+                        err = []
+                        if flu < 3:
+                            err.append("Fluency/Grammar")
+                        if hybrid < acc_thr:
+                            err.append("Semantic Deviation")
+                        if lexical < lex_thr:
+                            err.append("Low Lexical Overlap")
+                        n_words = len(trans_text_norm.split())
+                        if n_words < 3:
+                            err.append("Too Short")
+                        elif n_words > 60:
+                            err.append("Too Long / Verbosity")
 
-        st.subheader("Your Metrics")
-        st.markdown(f"""
-        - **Fluency:** {metrics['fluency']}
-        - **Accuracy:** {metrics['accuracy']}
-        - **BLEU:** {metrics['bleu']}
-        - **chrF:** {metrics['chrF']}
-        - **Additions:** {metrics['additions']}
-        - **Deletions:** {metrics['deletions']}
-        - **Edits:** {metrics['edits']}
-        - **Time Spent:** {round(time_spent,2)} sec
-        - **Keystrokes:** {st.session_state[f"keystrokes_{ex_id}"]}
-        """)
+                        row_result.update({
+                            f"{t_col}_LexicalMetric": used_metric,
+                            f"{t_col}_Lexical": lexical,
+                            f"{t_col}_Cosine": cosine_sim,
+                            f"{t_col}_Accuracy": hybrid,
+                            f"{t_col}_Fluency": flu,
+                            f"{t_col}_Errors": ", ".join(sorted(set(err))) if err else "None",
+                        })
 
-        if task_type=="Post-edit MT":
-            st.subheader("Track Changes")
-            base = ex.get("mt_text","")
-            st.markdown(diff_text(base, student_text), unsafe_allow_html=True)
+                        # Inline diff (HTML, not exported)
+                        with st.expander(f"Diff: {t_col} vs {source_col} (row {idx})", expanded=False):
+                            st.markdown(token_diff(source_text, trans_text), unsafe_allow_html=True)
 
-        show_leaderboard()
+                    elif mode == "Pairwise Comparison":
+                        for other_col in translation_cols:
+                            if other_col == t_col:
+                                continue
+                            other_text = str(row[other_col])
+                            other_text_norm = str(df_norm.iloc[idx][other_col])
+                            cosine_sim, used_metric, lexical, hybrid = semantic_accuracy_score(
+                                other_text_norm,
+                                trans_text_norm,
+                                embed_cache,
+                                semantic_weight,
+                                lexical_weight,
+                                prefer_chrf=use_chrf,
+                            )
+                            flu = fluency_score(trans_text)
+                            err = []
+                            if flu < 3:
+                                err.append("Fluency/Grammar")
+                            n_words = len(trans_text_norm.split())
+                            if n_words < 3:
+                                err.append("Too Short")
+                            elif n_words > 60:
+                                err.append("Too Long / Verbosity")
 
-# ---------------- Main ----------------
-def main():
-    st.sidebar.title("Navigation")
-    role = st.sidebar.radio("Login as", ["Instructor","Student"])
-    if role=="Instructor": instructor_dashboard()
-    else: student_dashboard()
+                            row_result.update({
+                                f"{t_col}_vs_{other_col}_LexicalMetric": used_metric,
+                                f"{t_col}_vs_{other_col}_Lexical": lexical,
+                                f"{t_col}_vs_{other_col}_Cosine": cosine_sim,
+                                f"{t_col}_vs_{other_col}_Accuracy": hybrid,
+                                f"{t_col}_vs_{other_col}_Fluency": flu,
+                                f"{t_col}_vs_{other_col}_Errors": ", ".join(sorted(set(err))) if err else "None",
+                            })
 
-if __name__=="__main__":
-    main()
+                    elif mode == "Standalone Student Assessment":
+                        flu = fluency_score(trans_text)
+                        # No reference: cosine/lexical/hybrid are None
+                        row_result.update({
+                            f"{t_col}_Fluency": flu,
+                            f"{t_col}_Cosine": None,
+                            f"{t_col}_Lexical": None,
+                            f"{t_col}_Accuracy": None,
+                            f"{t_col}_Errors": "None" if flu >= 3 else "Fluency/Grammar",
+                        })
+
+                results.append(row_result)
+
+            res_df = pd.DataFrame(results)
+
+            # ---------------------------
+            # Identify Best Translation per sentence (Reference-based)
+            # ---------------------------
+            if mode == "Reference-based":
+                acc_cols = [c for c in res_df.columns if c.endswith("_Accuracy")]
+                if acc_cols:
+                    res_df["Best_Translation"] = res_df[acc_cols].idxmax(axis=1)
+                    res_df["Best_Translation"] = res_df["Best_Translation"].str.replace("_Accuracy", "", regex=False)
+
+            st.dataframe(res_df.head(20))
+
+            # ---------------------------
+            # Low-Quality Flags (using adaptive thresholds when applicable)
+            # ---------------------------
+            st.subheader("⚠️ Low-Quality Translation Flags")
+            flagged_cols = []
+            if mode == "Reference-based" and source_col:
+                for i in range(len(res_df)):
+                    acc_thr, lex_thr = dynamic_thresholds(ref_lens[i])
+                    for c in translation_cols:
+                        acc_col = f"{c}_Accuracy"
+                        lex_col = f"{c}_Lexical"
+                        if acc_col in res_df.columns:
+                            flag_c = acc_col.replace("_Accuracy", "_Low_Accuracy_Flag")
+                            res_df.loc[i, flag_c] = "⚠️" if pd.notna(res_df.loc[i, acc_col]) and res_df.loc[i, acc_col] < acc_thr else ""
+                            flagged_cols.append(flag_c)
+                        if lex_col in res_df.columns:
+                            flag_l = lex_col.replace("_Lexical", "_Low_Lexical_Flag")
+                            res_df.loc[i, flag_l] = "⚠️" if pd.notna(res_df.loc[i, lex_col]) and res_df.loc[i, lex_col] < lex_thr else ""
+                            flagged_cols.append(flag_l)
+            # Fluency flags (all modes)
+            for col in res_df.columns:
+                if col.endswith("_Fluency"):
+                    flag_col = col.replace("_Fluency", "_Low_Fluency_Flag")
+                    res_df[flag_col] = res_df[col].apply(lambda x: "⚠️" if pd.notna(x) and x < 3 else "")
+                    flagged_cols.append(flag_col)
+
+            if flagged_cols:
+                st.dataframe(res_df[sorted(set(flagged_cols))].head(20))
+
+            # ---------------------------
+            # Heatmaps (styled DataFrames for speed)
+            # ---------------------------
+            if mode == "Reference-based":
+                st.subheader("📈 Per-Sentence Similarity Heatmaps")
+                def style_heatmap(df_num):
+                    try:
+                        return df_num.style.background_gradient(cmap="YlGnBu").format("{:.2f}")
+                    except Exception:
+                        return df_num
+
+                metric_map = {
+                    "Lexical": [c for c in res_df.columns if c.endswith("_Lexical")],
+                    "Cosine": [c for c in res_df.columns if c.endswith("_Cosine")],
+                    "Accuracy": [c for c in res_df.columns if c.endswith("_Accuracy")],
+                }
+                for metric, cols in metric_map.items():
+                    if cols:
+                        st.markdown(f"**{metric} per Sentence**")
+                        st.dataframe(style_heatmap(res_df[cols]))
+
+            # ---------------------------
+            # Dashboard Metrics (compact)
+            # ---------------------------
+            st.subheader("📊 Dashboard Summary")
+            if mode == "Reference-based":
+                metrics = ["Lexical", "Cosine", "Accuracy", "Fluency"]
+            elif mode == "Pairwise Comparison":
+                metrics = ["Lexical", "Cosine", "Accuracy"]
+            else:
+                metrics = ["Fluency"]
+
+            for metric in metrics:
+                metric_cols = [c for c in res_df.columns if c.endswith(metric)]
+                if metric_cols:
+                    plt.figure(figsize=(10, 4))
+                    sns.boxplot(data=res_df[metric_cols])
+                    plt.ylabel(metric)
+                    plt.title(f"{metric} Distribution Across Students / Translations")
+                    st.pyplot(plt)
+
+            # ---------------------------
+            # Clean CSV Export (exclude HTML diffs)
+            # ---------------------------
+            st.subheader("📥 Export Cleaned Results")
+            preferred_order = []
+            for base in translation_cols:
+                for metric in ["Accuracy", "Lexical", "Cosine", "Fluency", "Errors"]:
+                    matches = [c for c in res_df.columns if c.startswith(base) and c.endswith(metric)]
+                    preferred_order.extend(matches)
+                # include metric name column if present
+                metric_name_col = f"{base}_LexicalMetric"
+                if metric_name_col in res_df.columns:
+                    preferred_order.append(metric_name_col)
+            flag_cols = [c for c in res_df.columns if "Flag" in c]
+            if "Best_Translation" in res_df.columns:
+                preferred_order = ["Best_Translation"] + preferred_order
+            preferred_order.extend(flag_cols)
+            other_cols = [c for c in res_df.columns if c not in preferred_order]
+            ordered_cols = preferred_order + other_cols
+            export_df = res_df[ordered_cols].copy()
+
+            # Human-readable column names
+            export_df.columns = (
+                export_df.columns
+                .str.replace("_", " ")
+                .str.replace(" Lexical", " (Lexical)")
+                .str.replace(" Accuracy", " (Hybrid Accuracy)")
+                .str.replace(" Cosine", " (Semantic Cosine)")
+                .str.replace(" Fluency", " (Fluency)")
+                .str.replace(" Errors", " (Error Categories)")
+                .str.replace(" Flag", " ⚠️", regex=False)
+            )
+            export_df = export_df.applymap(lambda x: round(x, 3) if isinstance(x, (float, int)) else x)
+
+            st.dataframe(export_df.head(20))
+            csv = export_df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+            st.download_button(
+                "Download Full Analysis Results (Clean CSV)",
+                csv,
+                "translation_analysis_clean.csv",
+                "text/csv",
+            )
+
+    except Exception as e:
+        st.error(f"Error: {e}")
+else:
+    st.info("Upload CSV, Excel, or Word file to begin analysis.")
