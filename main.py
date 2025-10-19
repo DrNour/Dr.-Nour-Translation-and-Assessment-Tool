@@ -199,7 +199,7 @@ highlights_html = render_highlights(student_text, issues)
 exercises = activities_from_issues(source_text, student_text, issues)
 
 
-        if sub.get("task_type") == "Post-edit MT":
+    if sub.get("task_type") == "Post-edit MT":
             doc.add_paragraph("Student Submission (Track Changes):")
             base = sub.get("mt_text", "")
             add_diff_to_doc(doc, base, sub.get("student_text", ""))
@@ -517,4 +517,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
