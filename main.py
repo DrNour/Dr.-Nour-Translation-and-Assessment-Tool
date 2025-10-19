@@ -177,6 +177,28 @@ def export_student_word(submissions, student_name):
             doc.add_paragraph("MT Output:")
             doc.add_paragraph(sub.get("mt_text", ""))
 
+        from feedback_core import analyze, render_highlights, teacher_overview, activities_from_issues
+
+# Assuming you have strings:
+#   source_text  -> the original
+#   student_text -> student’s PE
+#   synonyms_dict -> optional {"wrong":"preferred"} map
+
+issues, direction = analyze(source_text, student_text, synonyms_dict)
+
+# 1) Teacher paragraph
+teacher_note = teacher_overview(issues)
+
+# 2) Highlights (HTML you can render in your UI)
+highlights_html = render_highlights(student_text, issues)
+
+# 3) Issue cards: loop and display
+#    it.cat / it.severity / it.message / it.found / it.prefer / it.example
+
+# 4) Exercises (never empty)
+exercises = activities_from_issues(source_text, student_text, issues)
+
+
         if sub.get("task_type") == "Post-edit MT":
             doc.add_paragraph("Student Submission (Track Changes):")
             base = sub.get("mt_text", "")
@@ -495,3 +517,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
