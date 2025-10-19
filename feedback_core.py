@@ -105,21 +105,57 @@ def render_highlights(text:str, issues:List[Issue])->str:
         color=COLORS.get(cat,"#555"); out=out[:s]+f'<mark style="background:{color}22;border-bottom:2px solid {color}">{out[s:e]}</mark>'+out[e:]
     return f'<div style="font-family: ui-sans-serif; line-height:1.75; font-size:1rem'>{out}</div>'
 
-def teacher_overview(issues:List[Issue])->str:
-    if not issues: return "Excellent draft. No issues detected — keep this level of accuracy and fluency."
-    counts={}; 
-    for it in issues: counts[it.cat]=counts.get(it.cat,0)+1
-    order=["Accuracy","Collocations","Terminology","Idioms","Fluency","Formatting"]
-    cats=", ".join([f"{c.lower()} ({counts[c]})" for c in order if counts.get(c)][:3])
-    focus=[]
-    if counts.get("Collocations"): focus.append("collocations (natural verb–noun pairs)")
-    if counts.get("Terminology"): focus.append("word choice (preferred terms)")
-    if counts.get("Accuracy"): focus.append("numbers & coverage")
-    msg = f"I noticed issues mainly in {cats}. "
-    if focus: msg += "Focus first on " + " and ".join(focus) + ". "
-    if counts.get("Idioms"): msg += "Use idiomatic phrasing where suitable. "
-    if counts.get("Fluency"): msg += "Polish punctuation spacing and comma usage. "
-    return msg.strip()
+# --- replace the whole teacher_overview() with this ---
+def teacher_overview(issues, *, lang="en", tone="supportive"):
+    """
+    Make a short teacher-style paragraph.
+    lang: "en" or "ar"
+    tone: "supportive" | "neutral" | "strict"
+    """
+    if not issues:
+        return ("Great work—your translation is accurate and fluent. Keep it up!"
+                if lang=="en" else "عمل رائع—ترجمتك دقيقة وسلسة. استمر!")
+
+    # counts per category
+    counts = {}
+    for it in issues:
+        counts[it.cat] = counts.get(it.cat, 0) + 1
+
+    # priority list
+    focus = []
+    if counts.get("Accuracy"):     focus.append("accuracy" if lang=="en" else "الدقة")
+    if counts.get("Collocations"): focus.append("collocations" if lang=="en" else "التراكيب الاصطلاحية")
+    if counts.get("Terminology"):  focus.append("word choice/terminology" if lang=="en" else "الاختيار المصطلحي")
+    if counts.get("Idioms"):       focus.append("idiomatic phrasing" if lang=="en" else "التعبير الاصطلاحي")
+    if counts.get("Fluency"):      focus.append("punctuation/spacing" if lang=="en" else "علامات الترقيم والمسافات")
+
+    # sentence banks by tone
+    prefix = {
+        "supportive": "You're close. " if lang=="en" else "أنت على الطريق الصحيح. ",
+        "neutral":    "Main issues detected. " if lang=="en" else "تم رصد أبرز المشكلات. ",
+        "strict":     "Revise carefully. " if lang=="en" else "راجع بعناية. "
+    }[tone]
+
+    # build the paragraph (2–4 short sentences)
+    if lang == "en":
+        main = "I noticed issues in " + ", ".join(f"{k} ({counts[k]})" for k in ["Accuracy","Collocations","Terminology","Idioms","Fluency","Formatting"] if counts.get(k)) + "."
+        if focus:
+            focus_line = "Focus first on " + ", ".join(focus[:2]) + ("." if len(focus)<=2 else ", then the rest.")
+        else:
+            focus_line = "Keep refining for naturalness and consistency."
+        tip = "Use natural verb–noun pairs and check numbers vs. source." if counts.get("Collocations") or counts.get("Accuracy") else "Polish punctuation and spacing."
+        return prefix + " ".join([main, focus_line, tip])
+    else:
+        # Arabic version
+        main = "ظهرت مشكلات في " + "، ".join(f"{'الدقة' if k=='Accuracy' else 'التراكيب' if k=='Collocations' else 'المصطلحات' if k=='Terminology' else 'التعابير' if k=='Idioms' else 'السلاسة' if k=='Fluency' else 'التنسيق'} ({counts[k]})"
+                                           for k in ["Accuracy","Collocations","Terminology","Idioms","Fluency","Formatting"] if counts.get(k)) + "."
+        if focus:
+            focus_line = "ابدأ بالتركيز على " + "، ".join(focus[:2]) + ("." if len(focus)<=2 else "، ثم أكمل البقية.")
+        else:
+            focus_line = "واصل التحسين لزيادة الطبيعية والاتساق."
+        tip = "تحقّق من توافق الأرقام مع النص الأصلي واستخدم أفعالاً مع أسماء مناسبة." if counts.get("Collocations") or counts.get("Accuracy") else "لمّع الصياغة بعلامات الترقيم والمسافات."
+        return prefix + " ".join([main, focus_line, tip])
+
 
 def activities_from_issues(src:str, pe:str, issues:List[Issue]):
     acts=[]
