@@ -1,4 +1,10 @@
-# app.py
+# main.py  — EduApp (single file)
+# - Evidence-based adaptive feedback (with concrete examples)
+# - Safer instructor login (env var or SHA256; fallback for dev)
+# - JSON storage maintained (no DB migration needed)
+# - Reflection capture, progress charts, class snapshot
+# - Graceful fallbacks for optional libs; no crashes on missing deps
+
 import os
 import re
 import json
@@ -10,6 +16,7 @@ from io import BytesIO
 from pathlib import Path
 from typing import List, Tuple
 from difflib import SequenceMatcher, ndiff
+import datetime
 
 import streamlit as st
 import pandas as pd
@@ -27,12 +34,16 @@ try:
 except Exception:
     bertscore_score = None
 
-# Optional plotting (safe fallback if not present)
+# Optional plotting
 try:
     import matplotlib.pyplot as plt  # noqa: F401
     _HAVE_MPL = True
 except Exception:
     _HAVE_MPL = False
+
+# ---------------- Proof-of-life banner (so you know this file is loaded) ----------------
+THIS_FILE = os.path.abspath(__file__)
+LAST_EDIT = datetime.datetime.fromtimestamp(os.path.getmtime(THIS_FILE))
 
 # ---------------- Storage (JSON with basic locking & atomic writes) ----------------
 DATA_DIR = Path("./data")
@@ -61,13 +72,13 @@ def save_json(file: Path, data):
             json.dump(data, f, indent=4, ensure_ascii=False)
         tmp.replace(file)
 
-# ---------------- Auth (safer than hardcoded) ----------------
+# ---------------- Auth (safer than hard-coded) ----------------
 def _env(name, default=""):
     return os.getenv(name, default)
 
-# You can set either of these in your environment before running the app:
-#   INSTRUCTOR_PASSWORD_PLAIN="your_password"
-#   INSTRUCTOR_PASSWORD_SHA256="<sha256 hex of your_password>"
+# Set one of these before running (recommended):
+#   export INSTRUCTOR_PASSWORD_PLAIN='StrongPass'
+#   export INSTRUCTOR_PASSWORD_SHA256='<sha256 hex of StrongPass>'
 _INSTRUCTOR_PLAIN = _env("INSTRUCTOR_PASSWORD_PLAIN", "")
 _INSTRUCTOR_SHA256 = _env("INSTRUCTOR_PASSWORD_SHA256", "")
 _FALLBACK_PLAIN = "admin123"  # used only if env vars aren't set
@@ -81,8 +92,7 @@ def check_password(typed: str) -> bool:
             return typed == _INSTRUCTOR_PLAIN
         return typed == _FALLBACK_PLAIN
     except Exception:
-        # Never crash login
-        return False
+        return False  # never crash on login
 
 # ---------------- Tokenization & Edit Helpers ----------------
 _token_re = re.compile(r"\w+|[^\w\s]", re.UNICODE)
@@ -136,7 +146,6 @@ def evaluate_translation(student_text, mt_text=None, reference=None, task_type="
         except Exception:
             bleu = None
             chrf = None
-
         try:
             if bertscore_score:
                 P, R, F1 = bertscore_score([student_text], [reference], lang="en")
@@ -291,63 +300,162 @@ def ai_generate_text(prompt):
         pass
     return None
 
-# ---------------- Lightweight Linguistic Hints + Adaptive Feedback ----------------
-_num_re = re.compile(r"\d+([.,]\d+)?")
+# ---------------- Evidence-based Linguistic Hints ----------------
+_AR_LETTERS = r"\u0600-\u06FF"  # Arabic Unicode block
+
+def _tokenize_words(text: str):
+    # words incl. hyphen/apostrophes; keep numbers as tokens
+    return re.findall(r"[A-Za-z" + _AR_LETTERS + r"]+[’'\-]?[A-Za-z" + _AR_LETTERS + r"]+|\d+(?:[.,]\d+)?", text)
+
+def _likely_terms(source_text: str):
+    """
+    Heuristics for 'terms/proper names':
+    - Titlecase/ALLCAPS (Latin)
+    - Contains hyphen or digits
+    - Quoted spans
+    - Arabic words length>=4
+    """
+    terms = set()
+    # quoted chunks
+    for q in re.findall(r"[\"“”‘’'`«»](.+?)[\"“”‘’'`«»]", source_text):
+        for w in _tokenize_words(q):
+            if len(w) >= 3:
+                terms.add(w)
+
+    for w in _tokenize_words(source_text):
+        if re.match(r"[A-Z][A-Za-z\-]+$", w):          # Titlecase
+            terms.add(w)
+        elif re.match(r"[A-Z0-9\-]{3,}$", w):          # ALLCAPS or alnum with -
+            terms.add(w)
+        elif "-" in w or re.search(r"\d", w):          # hyphenated or digits
+            terms.add(w)
+        elif re.match(r"[" + _AR_LETTERS + r"]{4,}$", w):  # Arabic word len>=4
+            terms.add(w)
+    return terms
+
+def _short_list(items, n=4):
+    items = list(items)
+    if not items:
+        return ""
+    if len(items) <= n:
+        return " | ".join(items)
+    return " | ".join(items[:n]) + f" … (+{len(items)-n} more)"
 
 def quick_linguistic_hints(source_text: str, student_text: str):
     hints = []
     try:
-        # numbers preserved?
+        # Numbers: exact evidence
         src_nums = set(re.findall(r"\d+(?:[.,]\d+)?", source_text))
         tgt_nums = set(re.findall(r"\d+(?:[.,]\d+)?", student_text))
-        if src_nums and not src_nums.issubset(tgt_nums):
-            hints.append("Some numbers may be missing or altered. Recheck figures.")
+        missing_nums = sorted(src_nums - tgt_nums, key=lambda x: (len(x), x))
+        if missing_nums:
+            hints.append({
+                "rule": "numbers_missing",
+                "message": "Some figures from the source didn’t appear in your text.",
+                "evidence": f"Missing: {_short_list(missing_nums)}"
+            })
 
-        # simple quotes / punctuation balance
+        # Brackets & quotes balance
+        for sym_open, sym_close, label in [("(", ")", "parentheses"), ("[", "]", "brackets"), ("{", "}", "braces")]:
+            if source_text.count(sym_open) != student_text.count(sym_close):
+                hints.append({
+                    "rule": f"{label}_unbalanced",
+                    "message": f"{label.capitalize()} look unbalanced.",
+                    "evidence": (f"Source {sym_open}/{sym_close}: {source_text.count(sym_open)}/{source_text.count(sym_close)}; "
+                                 f"Your text: {student_text.count(sym_open)}/{student_text.count(sym_close)}")
+                })
         if source_text.count('"') != student_text.count('"'):
-            hints.append("Quotation marks may be unbalanced; verify punctuation.")
+            hints.append({
+                "rule": "quotes_unbalanced",
+                "message": "Quotation marks may be unbalanced.",
+                "evidence": f'Source quotes: {source_text.count(chr(34))}; Yours: {student_text.count(chr(34))}'
+            })
 
-        # proper-noun heuristic: capitalized tokens
-        src_caps = {w for w in re.findall(r"\b[A-Z][A-Za-z\-]+\b", source_text)}
-        tgt_caps = {w for w in re.findall(r"\b[A-Z][A-Za-z\-]+\b", student_text)}
-        if src_caps and len(src_caps.intersection(tgt_caps)) < max(1, len(src_caps)//2):
-            hints.append("Proper names/terms may be missing or inconsistent.")
+        # Terms/proper names: concrete examples
+        src_terms = _likely_terms(source_text)
+        tgt_tokens = set(_tokenize_words(student_text))
+        missing_terms = sorted([t for t in src_terms if t not in tgt_tokens], key=lambda x: (-len(x), x))
+        if missing_terms:
+            hints.append({
+                "rule": "terms_missing",
+                "message": "Some key terms/names from the source weren’t reflected.",
+                "evidence": f"Examples: {_short_list(missing_terms)}"
+            })
     except Exception:
-        # Never let hints crash the app
         pass
     return hints
 
+# ---------------- Adaptive Feedback (varied phrasing + evidence) ----------------
 def generate_feedback(metrics: dict, task_type: str, source_text: str, student_text: str, extra_hints=None):
     msgs = []
     lr = metrics.get("length_ratio")
-    edits = metrics.get("edits", 0)
+    edits = int(metrics.get("edits", 0) or 0)
+    adds = int(metrics.get("additions", 0) or 0)
+    dels = int(metrics.get("deletions", 0) or 0)
     bleu = metrics.get("BLEU")
     chrf = metrics.get("chrF++")
 
+    # 1) Edit profile (Post-edit MT)
     if task_type == "Post-edit MT":
-        if edits > 20:
-            msgs.append("High edit count. Focus on adequacy and clear errors; avoid unnecessary stylistic churn.")
-        elif edits == 0:
-            msgs.append("No edits detected. Ensure that critical MT errors are corrected.")
+        if edits == 0:
+            msgs.append(("edits_none",
+                         "No edits were applied to the MT output.",
+                         "Review the MT carefully—critical errors may remain."))
+        elif edits > 20:
+            msgs.append(("edits_many",
+                         f"High edit volume detected: {edits} edits (additions {adds}, deletions {dels}).",
+                         "Prioritize adequacy/accuracy first; avoid cosmetic rephrasing that doesn’t fix meaning."))
 
-    if lr is not None and lr < 0.80:
-        msgs.append("Length ratio is low; output may be over-compressed. Check for omitted content.")
-    if lr is not None and lr > 1.30:
-        msgs.append("Length ratio is high; consider concision and avoid redundancy.")
+    # 2) Length ratio diagnostics
+    if lr is not None:
+        if lr < 0.80:
+            msgs.append(("len_low",
+                         f"Length ratio is {lr:.2f} (target ~0.90–1.20).",
+                         "Your translation may be over-compressed—recheck for omitted content."))
+        elif lr > 1.30:
+            msgs.append(("len_high",
+                         f"Length ratio is {lr:.2f} (target ~0.90–1.20).",
+                         "Consider concision—trim redundancy and literal padding."))
 
-    if bleu is not None and chrf is not None and bleu < 30 <= chrf:
-        msgs.append("Fluency looks acceptable but accuracy lags. Revisit terminology and key meaning units.")
+    # 3) Metric interplay (accuracy vs fluency)
+    if bleu is not None and chrf is not None:
+        if bleu < 30 <= chrf:
+            msgs.append(("acc_low_flu_ok",
+                         f"chrF++ is {chrf:.1f} (fluency ok) but BLEU is {bleu:.1f} (accuracy lagging).",
+                         "Revisit terminology and key meaning units; cross-check against the source."))
+        elif bleu >= 30 and chrf < 50:
+            msgs.append(("flu_low_acc_ok",
+                         f"BLEU is {bleu:.1f} (accuracy acceptable) but chrF++ is {chrf:.1f} (fluency weak).",
+                         "Polish cohesion and flow—simplify long clauses and connectors."))
+        elif bleu is not None and bleu < 20:
+            msgs.append(("both_low",
+                         f"BLEU is {bleu:.1f}.",
+                         "Start with adequacy: ensure all propositions are conveyed before stylistic edits."))
 
+    # 4) Integrate extra hints (numbers/terms/quotes) with evidence
     if extra_hints:
-        msgs.extend(extra_hints)
+        for h in extra_hints:
+            rule = h.get("rule", "hint")
+            msg = h.get("message", "")
+            evd = h.get("evidence", "")
+            if evd:
+                msgs.append((rule, msg, evd))
+            else:
+                msgs.append((rule, msg, ""))
 
-    # de-duplicate preserving order
+    # De-duplicate by rule key, keep order, cap to top 4
     seen = set()
     final = []
-    for m in msgs:
-        if m not in seen:
-            final.append(m)
-            seen.add(m)
+    for key, text, detail in msgs:
+        if key in seen:
+            continue
+        seen.add(key)
+        if detail:
+            final.append(f"• {text} — *{detail}*")
+        else:
+            final.append(f"• {text}")
+        if len(final) >= 4:
+            break
     return final
 
 # ---------------- Instructor ----------------
@@ -549,7 +657,7 @@ def student_dashboard():
         metrics = evaluate_translation(
             student_text,
             mt_text=ex.get("mt_text"),
-            reference=None,  # supply gold reference if available
+            reference=None,  # plug in a gold reference here if available
             task_type=task_type,
             source_text=ex.get("source_text", "")
         )
@@ -569,22 +677,15 @@ def student_dashboard():
 
         # Gamification points (BLEU/chrF++ might be None if no reference)
         points = 0
-        if metrics.get("BLEU") is not None:
-            try:
+        try:
+            if metrics.get("BLEU") is not None:
                 points += int(metrics["BLEU"])
-            except Exception:
-                pass
-        if metrics.get("chrF++") is not None:
-            try:
-                points += int(metrics["chrF++"] / 2)  # dampen
-            except Exception:
-                pass
-        if task_type == "Post-edit MT":
-            # reward efficient editing (fewer edits)
-            try:
+            if metrics.get("chrF++") is not None:
+                points += int(metrics["chrF++"] / 2)  # dampen chrF
+            if task_type == "Post-edit MT":
                 points += max(0, 10 - int(metrics["edits"]))
-            except Exception:
-                pass
+        except Exception:
+            pass
         update_leaderboard(student_name, points)
 
         st.success("Submission saved!")
@@ -605,15 +706,15 @@ def student_dashboard():
 - **Characters Typed**: {st.session_state[keys_key]}
 """)
 
-        # Adaptive feedback
+        # Adaptive feedback (varied + evidence)
         extra = quick_linguistic_hints(ex.get("source_text",""), student_text)
         feedback_msgs = generate_feedback(metrics, task_type, ex.get("source_text",""), student_text, extra)
         st.subheader("Adaptive Feedback")
         if feedback_msgs:
             for m in feedback_msgs:
-                st.markdown(f"- {m}")
+                st.markdown(m)
         else:
-            st.info("No specific issues detected. Consider stylistic refinement and coherence checks.")
+            st.info("No specific issues triggered. Focus on cohesion, clarity, and consistent terminology.")
 
         if task_type == "Post-edit MT":
             st.subheader("Track Changes")
@@ -621,7 +722,7 @@ def student_dashboard():
             base = ex.get("mt_text", "") or ""
             st.markdown(diff_text(base, student_text), unsafe_allow_html=True)
 
-        # Progress mini-dashboard
+        # Progress mini-dashboard (JSON-based)
         try:
             history = []
             for ex_id2, sub2 in submissions.get(student_name, {}).items():
@@ -635,14 +736,12 @@ def student_dashboard():
             if history:
                 st.subheader("Progress Overview")
                 df_hist = pd.DataFrame(history)
-                # Trend line for BLEU/chrF++ when available
                 try:
                     if not df_hist.empty:
                         df_trend = df_hist.set_index("ex")[["BLEU","chrF++"]]
                         st.line_chart(df_trend)
                 except Exception:
                     pass
-                # Edits as bars
                 try:
                     df_edits = df_hist.set_index("ex")[["Edits"]]
                     st.bar_chart(df_edits)
@@ -657,6 +756,13 @@ def student_dashboard():
 def main():
     st.set_page_config(page_title="Translation Lab (EduApp)", layout="wide")
     st.sidebar.title("Navigation")
+    # proof-of-life info
+    st.sidebar.info(f"Loaded: {THIS_FILE}\n\nLast modified: {LAST_EDIT:%Y-%m-%d %H:%M:%S}")
+    st.markdown(
+        "<div style='padding:8px;border:1px solid #ddd;border-radius:8px;background:#f7f9ff'>"
+        "<b>EduApp – Build:</b> 2025-11-10 v3 (evidence-based feedback)</div>",
+        unsafe_allow_html=True
+    )
     role = st.sidebar.radio("Login as", ["Instructor", "Student"], index=1)
     if role == "Instructor":
         instructor_dashboard()
