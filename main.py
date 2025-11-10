@@ -1,16 +1,17 @@
-import streamlit as st
-import json
+# app.py
 import os
-import time
 import re
+import json
+import time
+import hashlib
 import random
 import threading
+from io import BytesIO
 from pathlib import Path
 from typing import List, Tuple
 from difflib import SequenceMatcher, ndiff
-from io import BytesIO
 
-import requests  # used by ai_generate_text
+import streamlit as st
 import pandas as pd
 from docx import Document
 from docx.shared import RGBColor
@@ -25,6 +26,13 @@ try:
     from bert_score import score as bertscore_score
 except Exception:
     bertscore_score = None
+
+# Optional plotting (safe fallback if not present)
+try:
+    import matplotlib.pyplot as plt  # noqa: F401
+    _HAVE_MPL = True
+except Exception:
+    _HAVE_MPL = False
 
 # ---------------- Storage (JSON with basic locking & atomic writes) ----------------
 DATA_DIR = Path("./data")
@@ -43,7 +51,6 @@ def load_json(file: Path):
             try:
                 return json.load(f)
             except json.JSONDecodeError:
-                # If a previous run got interrupted; return empty dict rather than crashing
                 return {}
     return {}
 
@@ -54,6 +61,29 @@ def save_json(file: Path, data):
             json.dump(data, f, indent=4, ensure_ascii=False)
         tmp.replace(file)
 
+# ---------------- Auth (safer than hardcoded) ----------------
+def _env(name, default=""):
+    return os.getenv(name, default)
+
+# You can set either of these in your environment before running the app:
+#   INSTRUCTOR_PASSWORD_PLAIN="your_password"
+#   INSTRUCTOR_PASSWORD_SHA256="<sha256 hex of your_password>"
+_INSTRUCTOR_PLAIN = _env("INSTRUCTOR_PASSWORD_PLAIN", "")
+_INSTRUCTOR_SHA256 = _env("INSTRUCTOR_PASSWORD_SHA256", "")
+_FALLBACK_PLAIN = "admin123"  # used only if env vars aren't set
+
+def check_password(typed: str) -> bool:
+    try:
+        if _INSTRUCTOR_SHA256:
+            h = hashlib.sha256(typed.encode("utf-8")).hexdigest()
+            return h == _INSTRUCTOR_SHA256
+        if _INSTRUCTOR_PLAIN:
+            return typed == _INSTRUCTOR_PLAIN
+        return typed == _FALLBACK_PLAIN
+    except Exception:
+        # Never crash login
+        return False
+
 # ---------------- Tokenization & Edit Helpers ----------------
 _token_re = re.compile(r"\w+|[^\w\s]", re.UNICODE)
 
@@ -61,11 +91,6 @@ def _tokenize(s: str) -> List[str]:
     return _token_re.findall(s or "")
 
 def compute_edit_details(mt_text: str, student_text: str) -> Tuple[int, int, int]:
-    """
-    Token-level edit summary:
-    additions, deletions, total_edits
-    (replace counts as max span length, i.e., single op per replaced region)
-    """
     mt_tokens = _tokenize(mt_text)
     st_tokens = _tokenize(student_text)
     matcher = SequenceMatcher(None, mt_tokens, st_tokens)
@@ -106,7 +131,6 @@ def evaluate_translation(student_text, mt_text=None, reference=None, task_type="
         refs = [reference]
         try:
             if sacrebleu:
-                # sacrebleu expects: sys_stream (list[str]), ref_streams (list[list[str]])
                 bleu = float(sacrebleu.corpus_bleu([student_text], [refs]).score)  # 0-100
                 chrf = float(sacrebleu.corpus_chrf([student_text], [refs]).score)  # 0-100
         except Exception:
@@ -132,7 +156,6 @@ def evaluate_translation(student_text, mt_text=None, reference=None, task_type="
 
 # ---------------- Track Changes (HTML + DOCX) ----------------
 def _join_tokens_for_display(tokens: List[str]) -> str:
-    # Join tokens with spaces, then clean spaces before punctuation
     out = " ".join(tokens)
     out = re.sub(r"\s+([.,!?;:])", r"\1", out)
     return out
@@ -165,7 +188,7 @@ def add_diff_to_doc(doc: Document, baseline: str, student_text: str):
         else:
             p.add_run(token + " ")
 
-# ---------------- Word Export ----------------
+# ---------------- Exports ----------------
 def export_student_word(submissions, student_name):
     doc = Document()
     doc.add_heading(f"Student: {student_name}", 0)
@@ -178,7 +201,6 @@ def export_student_word(submissions, student_name):
             doc.add_paragraph("MT Output:")
             doc.add_paragraph(sub.get("mt_text", ""))
 
-        # Student submission (with or without track changes)
         if sub.get("task_type") == "Post-edit MT":
             doc.add_paragraph("Student Submission (Track Changes):")
             base = sub.get("mt_text", "") or ""
@@ -192,6 +214,9 @@ def export_student_word(submissions, student_name):
         doc.add_paragraph(f"Task Type: {sub.get('task_type','')}")
         doc.add_paragraph(f"Time Spent: {sub.get('time_spent_sec', 0):.2f} sec")
         doc.add_paragraph(f"Characters (not keystrokes): {sub.get('keystrokes', 0)}")
+        if sub.get("reflection"):
+            doc.add_paragraph("Reflection:")
+            doc.add_paragraph(sub.get("reflection"))
         doc.add_paragraph("---")
 
     buf = BytesIO()
@@ -199,7 +224,6 @@ def export_student_word(submissions, student_name):
     buf.seek(0)
     return buf
 
-# ---------------- Excel Summary Export ----------------
 def export_summary_excel(submissions):
     rows = []
     for student, subs in submissions.items():
@@ -226,28 +250,31 @@ def export_summary_excel(submissions):
     return buf
 
 # ---------------- Gamification ----------------
+def load_leaderboard():
+    return load_json(LEADERBOARD_FILE)
+
 def update_leaderboard(student_name, points):
-    leaderboard = load_json(LEADERBOARD_FILE)
+    leaderboard = load_leaderboard()
     leaderboard[student_name] = leaderboard.get(student_name, 0) + points
     save_json(LEADERBOARD_FILE, leaderboard)
 
 def show_leaderboard():
-    leaderboard = load_json(LEADERBOARD_FILE)
+    leaderboard = load_leaderboard()
     st.subheader("Leaderboard")
     if leaderboard:
-        # Show as dataframe for clarity
         items = sorted(leaderboard.items(), key=lambda x: x[1], reverse=True)
         df = pd.DataFrame(items, columns=["Student", "Points"])
         st.dataframe(df, use_container_width=True)
     else:
         st.info("No leaderboard data yet.")
 
-# ---------------- Optional Hugging Face Text Generator ----------------
+# ---------------- Optional AI generator (safe off) ----------------
 def ai_generate_text(prompt):
-    HF_TOKEN = ""  # 🔒 Leave empty unless you want to activate it later.
+    HF_TOKEN = ""  # Leave empty for safety
     if not HF_TOKEN:
-        return None  # Safe fallback
+        return None
     try:
+        import requests
         headers = {"Authorization": f"Bearer {HF_TOKEN}"}
         payload = {"inputs": prompt}
         response = requests.post(
@@ -264,12 +291,70 @@ def ai_generate_text(prompt):
         pass
     return None
 
+# ---------------- Lightweight Linguistic Hints + Adaptive Feedback ----------------
+_num_re = re.compile(r"\d+([.,]\d+)?")
+
+def quick_linguistic_hints(source_text: str, student_text: str):
+    hints = []
+    try:
+        # numbers preserved?
+        src_nums = set(re.findall(r"\d+(?:[.,]\d+)?", source_text))
+        tgt_nums = set(re.findall(r"\d+(?:[.,]\d+)?", student_text))
+        if src_nums and not src_nums.issubset(tgt_nums):
+            hints.append("Some numbers may be missing or altered. Recheck figures.")
+
+        # simple quotes / punctuation balance
+        if source_text.count('"') != student_text.count('"'):
+            hints.append("Quotation marks may be unbalanced; verify punctuation.")
+
+        # proper-noun heuristic: capitalized tokens
+        src_caps = {w for w in re.findall(r"\b[A-Z][A-Za-z\-]+\b", source_text)}
+        tgt_caps = {w for w in re.findall(r"\b[A-Z][A-Za-z\-]+\b", student_text)}
+        if src_caps and len(src_caps.intersection(tgt_caps)) < max(1, len(src_caps)//2):
+            hints.append("Proper names/terms may be missing or inconsistent.")
+    except Exception:
+        # Never let hints crash the app
+        pass
+    return hints
+
+def generate_feedback(metrics: dict, task_type: str, source_text: str, student_text: str, extra_hints=None):
+    msgs = []
+    lr = metrics.get("length_ratio")
+    edits = metrics.get("edits", 0)
+    bleu = metrics.get("BLEU")
+    chrf = metrics.get("chrF++")
+
+    if task_type == "Post-edit MT":
+        if edits > 20:
+            msgs.append("High edit count. Focus on adequacy and clear errors; avoid unnecessary stylistic churn.")
+        elif edits == 0:
+            msgs.append("No edits detected. Ensure that critical MT errors are corrected.")
+
+    if lr is not None and lr < 0.80:
+        msgs.append("Length ratio is low; output may be over-compressed. Check for omitted content.")
+    if lr is not None and lr > 1.30:
+        msgs.append("Length ratio is high; consider concision and avoid redundancy.")
+
+    if bleu is not None and chrf is not None and bleu < 30 <= chrf:
+        msgs.append("Fluency looks acceptable but accuracy lags. Revisit terminology and key meaning units.")
+
+    if extra_hints:
+        msgs.extend(extra_hints)
+
+    # de-duplicate preserving order
+    seen = set()
+    final = []
+    for m in msgs:
+        if m not in seen:
+            final.append(m)
+            seen.add(m)
+    return final
+
 # ---------------- Instructor ----------------
 def instructor_dashboard():
     st.title("Instructor Dashboard")
-    # Per your request, leave password as-is:
     password = st.text_input("Enter instructor password", type="password")
-    if password != "admin123":
+    if not check_password(password):
         st.warning("Incorrect password. Access denied.")
         return
 
@@ -281,8 +366,8 @@ def instructor_dashboard():
     selected_ex = st.selectbox("Select Exercise", ex_ids)
 
     # Prefill if editing
-    if selected_ex != "New":
-        default_source = exercises[selected_ex]["source_text"]
+    if selected_ex != "New" and selected_ex in exercises:
+        default_source = exercises[selected_ex].get("source_text", "")
         default_mt = exercises[selected_ex].get("mt_text", "") or ""
     else:
         default_source = ""
@@ -300,10 +385,14 @@ def instructor_dashboard():
             gen_btn = st.form_submit_button("Generate AI Exercise")
 
     if save_btn:
-        next_id = (
-            str(max([int(k) for k in exercises.keys()] + [0]) + 1).zfill(3)
-            if selected_ex == "New" else selected_ex
-        )
+        try:
+            next_id = (
+                str(max([int(k) for k in exercises.keys()] + [0]) + 1).zfill(3)
+                if selected_ex == "New" else selected_ex
+            )
+        except Exception:
+            next_id = "001" if selected_ex == "New" else selected_ex
+
         exercises[next_id] = {
             "source_text": st_text,
             "mt_text": (mt_text.strip() or None)
@@ -321,7 +410,10 @@ def instructor_dashboard():
         ai_text = ai_generate_text(prompt)
         new_text = ai_text if ai_text else f"This is AI generated exercise {random.randint(1,1000)}."
         new_mt = f"MT output for exercise {random.randint(1,1000)}."
-        next_id = str(max([int(k) for k in exercises.keys()] + [0]) + 1).zfill(3)
+        try:
+            next_id = str(max([int(k) for k in exercises.keys()] + [0]) + 1).zfill(3)
+        except Exception:
+            next_id = "001"
         exercises[next_id] = {"source_text": new_text, "mt_text": new_mt}
         save_json(EXERCISES_FILE, exercises)
         st.success(f"Exercise saved as ID {next_id}")
@@ -329,22 +421,25 @@ def instructor_dashboard():
     st.subheader("Download Exercises")
     if exercises:
         for ex_id, ex in exercises.items():
-            buf = BytesIO()
-            doc = Document()
-            doc.add_heading(f"Exercise {ex_id}", 0)
-            doc.add_paragraph("Source Text:")
-            doc.add_paragraph(ex.get("source_text", ""))
-            if ex.get("mt_text"):
-                doc.add_paragraph("MT Output:")
-                doc.add_paragraph(ex.get("mt_text", ""))
-            doc.save(buf)
-            buf.seek(0)
-            st.download_button(
-                f"Exercise {ex_id} (Word)",
-                buf,
-                file_name=f"Exercise_{ex_id}.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            )
+            try:
+                buf = BytesIO()
+                doc = Document()
+                doc.add_heading(f"Exercise {ex_id}", 0)
+                doc.add_paragraph("Source Text:")
+                doc.add_paragraph(ex.get("source_text", ""))
+                if ex.get("mt_text"):
+                    doc.add_paragraph("MT Output:")
+                    doc.add_paragraph(ex.get("mt_text", ""))
+                doc.save(buf)
+                buf.seek(0)
+                st.download_button(
+                    f"Exercise {ex_id} (Word)",
+                    buf,
+                    file_name=f"Exercise_{ex_id}.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                )
+            except Exception:
+                st.info(f"Exercise {ex_id}: export not available (DOCX error).")
     else:
         st.info("No exercises yet.")
 
@@ -369,6 +464,28 @@ def instructor_dashboard():
             file_name="metrics_summary.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+
+        # Class Snapshot (mean chrF++ per exercise)
+        try:
+            st.subheader("Class Snapshot")
+            rows = []
+            for ex_id2, ex in exercises.items():
+                vals = []
+                for student, subs in submissions.items():
+                    sub = subs.get(ex_id2)
+                    if sub:
+                        m = sub.get("metrics", {})
+                        if m.get("chrF++") is not None:
+                            vals.append(m["chrF++"])
+                if vals:
+                    mean_val = round(sum(vals) / max(1, len(vals)), 2)
+                    rows.append({"Exercise": ex_id2, "chrF++ mean": mean_val, "n": len(vals)})
+            if rows:
+                st.dataframe(pd.DataFrame(rows))
+            else:
+                st.info("No metrics yet to summarize.")
+        except Exception:
+            st.info("Snapshot unavailable (aggregation error).")
 
         show_leaderboard()
     else:
@@ -422,17 +539,17 @@ def student_dashboard():
             initial_text,
             height=300
         )
+        reflection = st.text_area("Brief reflection (what changed / why?)", "", height=80)
         submitted = st.form_submit_button("Submit")
 
     if submitted:
         time_spent = time.time() - st.session_state[start_key]
         st.session_state[keys_key] = len(student_text)  # characters typed proxy
 
-        # NOTE: reference is not provided in this app; pass None unless you add a gold reference
         metrics = evaluate_translation(
             student_text,
             mt_text=ex.get("mt_text"),
-            reference=None,  # plug in a gold reference string here if available
+            reference=None,  # supply gold reference if available
             task_type=task_type,
             source_text=ex.get("source_text", "")
         )
@@ -445,27 +562,37 @@ def student_dashboard():
             "task_type": task_type,
             "time_spent_sec": round(time_spent, 2),
             "keystrokes": st.session_state[keys_key],  # actually characters
-            "metrics": metrics
+            "metrics": metrics,
+            "reflection": reflection
         }
         save_json(SUBMISSIONS_FILE, submissions)
 
         # Gamification points (BLEU/chrF++ might be None if no reference)
         points = 0
         if metrics.get("BLEU") is not None:
-            points += int(metrics["BLEU"])
+            try:
+                points += int(metrics["BLEU"])
+            except Exception:
+                pass
         if metrics.get("chrF++") is not None:
-            points += int(metrics["chrF++"] / 2)  # chrF++ is 0-100; dampen
+            try:
+                points += int(metrics["chrF++"] / 2)  # dampen
+            except Exception:
+                pass
         if task_type == "Post-edit MT":
             # reward efficient editing (fewer edits)
-            points += max(0, 10 - int(metrics["edits"]))
+            try:
+                points += max(0, 10 - int(metrics["edits"]))
+            except Exception:
+                pass
         update_leaderboard(student_name, points)
 
         st.success("Submission saved!")
 
         # Show metrics neatly
-        st.subheader("Your Metrics")
         def _fmt(v):
             return "—" if v is None else v
+        st.subheader("Your Metrics")
         st.markdown(f"""
 - **Length Ratio** (target/src): {_fmt(metrics['length_ratio'])}
 - **BLEU**: {_fmt(metrics['BLEU'])}
@@ -478,16 +605,57 @@ def student_dashboard():
 - **Characters Typed**: {st.session_state[keys_key]}
 """)
 
+        # Adaptive feedback
+        extra = quick_linguistic_hints(ex.get("source_text",""), student_text)
+        feedback_msgs = generate_feedback(metrics, task_type, ex.get("source_text",""), student_text, extra)
+        st.subheader("Adaptive Feedback")
+        if feedback_msgs:
+            for m in feedback_msgs:
+                st.markdown(f"- {m}")
+        else:
+            st.info("No specific issues detected. Consider stylistic refinement and coherence checks.")
+
         if task_type == "Post-edit MT":
             st.subheader("Track Changes")
+            st.caption("Track changes: green = additions, red strike = deletions.")
             base = ex.get("mt_text", "") or ""
             st.markdown(diff_text(base, student_text), unsafe_allow_html=True)
+
+        # Progress mini-dashboard
+        try:
+            history = []
+            for ex_id2, sub2 in submissions.get(student_name, {}).items():
+                m2 = sub2.get("metrics", {})
+                history.append({
+                    "ex": ex_id2,
+                    "BLEU": m2.get("BLEU"),
+                    "chrF++": m2.get("chrF++"),
+                    "Edits": m2.get("edits", 0)
+                })
+            if history:
+                st.subheader("Progress Overview")
+                df_hist = pd.DataFrame(history)
+                # Trend line for BLEU/chrF++ when available
+                try:
+                    if not df_hist.empty:
+                        df_trend = df_hist.set_index("ex")[["BLEU","chrF++"]]
+                        st.line_chart(df_trend)
+                except Exception:
+                    pass
+                # Edits as bars
+                try:
+                    df_edits = df_hist.set_index("ex")[["Edits"]]
+                    st.bar_chart(df_edits)
+                except Exception:
+                    pass
+        except Exception:
+            st.info("Progress charts unavailable.")
 
         show_leaderboard()
 
 # ---------------- Main ----------------
 def main():
-    st.set_page_config(page_title="Translation Lab", layout="wide")
+    st.set_page_config(page_title="Translation Lab (EduApp)", layout="wide")
     st.sidebar.title("Navigation")
     role = st.sidebar.radio("Login as", ["Instructor", "Student"], index=1)
     if role == "Instructor":
