@@ -1,8 +1,9 @@
-# main.py  — EduApp (single file)
+# main.py  — EduApp (single file, with Localisation Lab + sticker/text/image tasks)
 # - Evidence-based adaptive feedback (with concrete examples)
 # - Safer instructor login (env var or SHA256; fallback for dev)
 # - JSON storage maintained (no DB migration needed)
 # - Reflection capture, progress charts, class snapshot
+# - Localisation Lab with configurable sticker/text/image tasks
 # - Graceful fallbacks for optional libs; no crashes on missing deps
 
 import os
@@ -52,6 +53,11 @@ DATA_DIR.mkdir(exist_ok=True)
 EXERCISES_FILE = DATA_DIR / "exercises.json"
 SUBMISSIONS_FILE = DATA_DIR / "submissions.json"
 LEADERBOARD_FILE = DATA_DIR / "leaderboard.json"
+
+# NEW: localisation sticker/text/image tasks
+LOC_STICKERS_FILE = DATA_DIR / "loc_stickers.json"
+STICKER_IMG_DIR = DATA_DIR / "stickers"
+STICKER_IMG_DIR.mkdir(exist_ok=True)
 
 _lock = threading.Lock()
 
@@ -277,6 +283,125 @@ def show_leaderboard():
     else:
         st.info("No leaderboard data yet.")
 
+# ---------------- Instructor: manage sticker/text/image localisation tasks ----------------
+def localisation_sticker_manager():
+    st.subheader("Instructor – Sticker / text / image localisation tasks")
+
+    pwd = st.text_input("Instructor password", type="password", key="loc_sticker_pwd")
+    if not check_password(pwd):
+        st.info("Enter instructor password to manage these tasks.")
+        return
+
+    loc_stickers = load_json(LOC_STICKERS_FILE)
+    sticker_ids = ["New task"] + sorted(loc_stickers.keys())
+    selection = st.selectbox("Choose task", sticker_ids, key="loc_sticker_select")
+
+    if selection != "New task" and selection in loc_stickers:
+        current = loc_stickers[selection]
+        default_title = current.get("title", "")
+        default_instr = current.get("instructions", "")
+        default_text = current.get("content_text", "")
+        default_url = current.get("image_url", "") if current.get("image_type") == "url" else ""
+
+        st.markdown("**Current preview for students:**")
+        if default_text:
+            st.markdown("**Text to localise:**")
+            st.write(default_text)
+        if current.get("image_type") == "uploaded":
+            img_path = current.get("image_path", "")
+            if img_path and Path(img_path).exists():
+                st.image(str(img_path))
+            else:
+                st.warning("Image file not found on server.")
+        elif current.get("image_type") == "url":
+            st.image(current.get("image_url", ""))
+    else:
+        default_title = ""
+        default_instr = ""
+        default_text = ""
+        default_url = ""
+
+    with st.form("loc_sticker_form"):
+        title = st.text_input("Task title", value=default_title)
+        content_text = st.text_area(
+            "Text to be localised (optional)",
+            value=default_text,
+            height=120
+        )
+        instructions = st.text_area(
+            "Instructions for students (what to do with this text / image)",
+            value=default_instr,
+            height=120
+        )
+
+        st.write("Sticker / image (choose either URL or upload, both optional):")
+        image_url = st.text_input("Image URL (optional)", value=default_url)
+        uploaded = st.file_uploader(
+            "Or upload an image file",
+            type=["png", "jpg", "jpeg", "webp"]
+        )
+
+        col1, col2 = st.columns(2)
+        with col1:
+            save_btn = st.form_submit_button("Save / Update task")
+        with col2:
+            delete_btn = st.form_submit_button("Delete this task")
+
+    if save_btn:
+        if not title.strip() and not content_text.strip() and not image_url and not uploaded:
+            st.warning("Please provide at least a title, some text, or an image before saving.")
+            return
+
+        # choose ID
+        if selection != "New task" and selection in loc_stickers:
+            task_id = selection
+        else:
+            existing_nums = []
+            for sid in loc_stickers.keys():
+                m = re.match(r"STK_(\d+)$", sid)
+                if m:
+                    existing_nums.append(int(m.group(1)))
+            next_num = max(existing_nums + [0]) + 1
+            task_id = f"STK_{next_num:03d}"
+
+        image_type = None
+        image_path = ""
+        image_url_final = ""
+
+        if uploaded is not None:
+            safe_name = re.sub(r"[^\w\.\-]", "_", uploaded.name)
+            file_path = STICKER_IMG_DIR / f"{task_id}_{safe_name}"
+            with open(file_path, "wb") as f:
+                f.write(uploaded.getbuffer())
+            image_type = "uploaded"
+            image_path = str(file_path)
+        elif image_url:
+            image_type = "url"
+            image_url_final = image_url
+
+        # if updating and no new image chosen, keep old image info
+        if task_id in loc_stickers and image_type is None:
+            image_type = loc_stickers[task_id].get("image_type")
+            image_path = loc_stickers[task_id].get("image_path", "")
+            image_url_final = loc_stickers[task_id].get("image_url", "")
+
+        loc_stickers[task_id] = {
+            "title": title.strip(),
+            "instructions": instructions.strip(),
+            "content_text": content_text.strip(),
+            "image_type": image_type,
+            "image_path": image_path,
+            "image_url": image_url_final,
+            "created_at": datetime.datetime.now().isoformat()
+        }
+        save_json(LOC_STICKERS_FILE, loc_stickers)
+        st.success(f"Task {task_id} saved.")
+
+    if delete_btn and selection != "New task" and selection in loc_stickers:
+        loc_stickers.pop(selection, None)
+        save_json(LOC_STICKERS_FILE, loc_stickers)
+        st.success(f"Task {selection} deleted.")
+
 # ---------------- Optional AI generator (safe off) ----------------
 def ai_generate_text(prompt):
     HF_TOKEN = ""  # Leave empty for safety
@@ -458,7 +583,7 @@ def generate_feedback(metrics: dict, task_type: str, source_text: str, student_t
             break
     return final
 
-# ---------------- Instructor ----------------
+# ---------------- Instructor Dashboard (Core Translation Lab) ----------------
 def instructor_dashboard():
     st.title("Instructor Dashboard")
     password = st.text_input("Enter instructor password", type="password")
@@ -599,7 +724,7 @@ def instructor_dashboard():
     else:
         st.info("No submissions yet.")
 
-# ---------------- Student ----------------
+# ---------------- Student Dashboard (Core Translation Lab) ----------------
 def student_dashboard():
     st.title("Student Dashboard")
 
@@ -752,13 +877,26 @@ def student_dashboard():
 
         show_leaderboard()
 
-# ---------------- Localisation Lab (with JSON + leaderboard) ----------------
+# ---------------- Localisation Lab (with JSON + leaderboard + stickers/text/images) ----------------
 def localisation_lab():
     st.title("🌍 Localisation Lab")
     st.write(
         "Interactive exercises on localisation (English ↔ Arabic). "
         "Work here is saved to the same JSON/leaderboard as the core lab."
     )
+
+    mode = st.sidebar.radio(
+        "Localisation mode",
+        ["Student view", "Instructor (manage sticker/text/image tasks)"],
+        index=0,
+        key="loc_mode"
+    )
+
+    if mode == "Instructor (manage sticker/text/image tasks)":
+        localisation_sticker_manager()
+        return
+
+    # --- student view from here on ---
 
     # Identify student so we can save work
     student_name = st.text_input("Enter your name (for saving localisation work)")
@@ -780,6 +918,7 @@ def localisation_lab():
             "5️⃣ Post-editing: Error Detection",
             "6️⃣ App Store Description",
             "7️⃣ Strategy & Theory Reflection",
+            "🎨 Sticker / text / image task (from instructor)",
         ],
         key="loc_ex_select",
     )
@@ -867,7 +1006,7 @@ def localisation_lab():
         st.subheader("Leaderboard (including localisation tasks)")
         show_leaderboard()
 
-    # ---- Exercise implementations ----
+    # ---- Text-based exercises (1–7) ----
 
     def exercise_1():
         ex_id = "LOC_1"
@@ -1293,6 +1432,68 @@ def localisation_lab():
             )
             save_loc_submission(ex_id, source_text, main_text, reflection)
 
+    # ---- Sticker/text/image-based tasks from instructor ----
+    def exercise_stickers():
+        ex_id_base = "LOC_STICKER"
+        loc_stickers = load_json(LOC_STICKERS_FILE)
+
+        if not loc_stickers:
+            st.info("No sticker/text/image tasks have been created yet. Please ask your instructor.")
+            return
+
+        options = sorted(loc_stickers.keys())
+        chosen_id = st.selectbox(
+            "Choose task from your instructor",
+            options,
+            format_func=lambda sid: loc_stickers[sid].get("title", sid),
+            key="loc_sticker_student_select"
+        )
+
+        data = loc_stickers.get(chosen_id, {})
+        st.header("🎨 Sticker / text / image localisation task")
+        st.subheader(data.get("title", chosen_id))
+
+        content_text = data.get("content_text", "")
+        if content_text:
+            st.markdown("**Text to localise:**")
+            st.write(content_text)
+
+        # show image if any
+        if data.get("image_type") == "uploaded" and data.get("image_path"):
+            if Path(data["image_path"]).exists():
+                st.image(data["image_path"])
+            else:
+                st.warning("Sticker/image file missing on server.")
+        elif data.get("image_type") == "url" and data.get("image_url"):
+            st.image(data["image_url"])
+
+        if data.get("instructions"):
+            st.markdown("**Instructor instructions:**")
+            st.write(data["instructions"])
+
+        with st.form(f"loc_form_{ex_id_base}_{chosen_id}"):
+            answer = st.text_area(
+                "Write your localised version in Arabic:",
+                height=180,
+                key=f"loc_stk_answer_{chosen_id}"
+            )
+            reflection = st.text_area(
+                "Briefly explain your key localisation decisions:",
+                height=120,
+                key=f"loc_stk_refl_{chosen_id}"
+            )
+            submitted = st.form_submit_button("Submit task & get feedback")
+
+        if submitted:
+            # For metrics, treat source as combination of text + instructions
+            source_text = "\n".join(
+                [part for part in [content_text, data.get("instructions", "")] if part.strip()]
+            )
+            if not source_text.strip():
+                source_text = data.get("title", chosen_id)
+            ex_id = f"{ex_id_base}_{chosen_id}"
+            save_loc_submission(ex_id, source_text, answer, reflection)
+
     # ---- Router ----
     ex_id_map = {
         "1️⃣ Translation vs Localisation": "LOC_1",
@@ -1302,8 +1503,9 @@ def localisation_lab():
         "5️⃣ Post-editing: Error Detection": "LOC_5",
         "6️⃣ App Store Description": "LOC_6",
         "7️⃣ Strategy & Theory Reflection": "LOC_7",
+        "🎨 Sticker / text / image task (from instructor)": "LOC_STICKER",
     }
-    current_ex_id = ex_id_map[exercise]
+    current_ex_id = ex_id_map.get(exercise, "LOC_STICKER")
     start_key = f"loc_start_{student_name}_{current_ex_id}"
     if start_key not in st.session_state:
         st.session_state[start_key] = time.time()
@@ -1322,6 +1524,8 @@ def localisation_lab():
         exercise_6()
     elif exercise == "7️⃣ Strategy & Theory Reflection":
         exercise_7()
+    elif exercise == "🎨 Sticker / text / image task (from instructor)":
+        exercise_stickers()
 
 # ---------------- Main ----------------
 def main():
@@ -1332,7 +1536,7 @@ def main():
 
     st.markdown(
         "<div style='padding:8px;border:1px solid #ddd;border-radius:8px;background:#f7f9ff'>"
-        "<b>EduApp – Build:</b> 2025-11-10 v3 (evidence-based feedback)</div>",
+        "<b>EduApp – Build:</b> 2025-11-10 v4 (translation + localisation lab)</div>",
         unsafe_allow_html=True
     )
 
@@ -1346,7 +1550,7 @@ def main():
         localisation_lab()
         return
 
-    # Core translation lab (existing behaviour)
+    # Core translation lab
     role = st.sidebar.radio("Login as", ["Instructor", "Student"], index=1)
     if role == "Instructor":
         instructor_dashboard()
