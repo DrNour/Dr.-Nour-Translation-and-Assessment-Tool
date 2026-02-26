@@ -1011,7 +1011,7 @@ def student_dashboard():
 
     # Handle AI feedback request (only in Adaptive condition)
    if ask_ai:
-    if condition.startswith("Adaptive"):
+       if condition.startswith("Adaptive"):
 
         prompt = f"""
 You are an expert English–Arabic translation trainer.
