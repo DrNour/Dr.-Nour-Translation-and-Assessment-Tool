@@ -1010,7 +1010,7 @@ def student_dashboard():
             ask_ai = st.form_submit_button("Get AI feedback / suggestion")
 
     # Handle AI feedback request (only in Adaptive condition)
-       if ask_ai:
+    if ask_ai:
           if condition.startswith("Adaptive"):
             # Build a clear prompt for the HF model
             prompt = f"""
