@@ -1010,8 +1010,8 @@ def student_dashboard():
             ask_ai = st.form_submit_button("Get AI feedback / suggestion")
 
     # Handle AI feedback request (only in Adaptive condition)
- if ask_ai:
-       if condition.startswith("Adaptive"):
+       if ask_ai:
+          if condition.startswith("Adaptive"):
 
         prompt = f"""
 You are an expert English–Arabic translation trainer.
