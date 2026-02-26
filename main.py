@@ -9,6 +9,7 @@
 # - Graceful fallbacks for optional libs; no crashes on missing deps
 
 import os
+from ai_feedback import generate_ai_feedback
 import re
 import json
 import time
