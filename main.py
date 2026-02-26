@@ -1809,9 +1809,10 @@ def localisation_lab():
 # ---------------- Main ----------------
 def main():
     st.set_page_config(page_title="Translation Lab (EduApp)", layout="wide")
+
+    st.write("HF token loaded:", bool(os.getenv("HF_API_TOKEN")))
+
     st.sidebar.title("Navigation")
-    # proof-of-life info
-    st.sidebar.info(f"Loaded: {THIS_FILE}\n\nLast modified: {LAST_EDIT:%Y-%m-%d %H:%M:%S}")
 
     st.markdown(
         "<div style='padding:8px;border:1px solid #ddd;border-radius:8px;background:#f7f9ff'>"
