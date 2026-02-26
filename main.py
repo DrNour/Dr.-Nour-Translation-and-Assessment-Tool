@@ -1010,17 +1010,36 @@ def student_dashboard():
             ask_ai = st.form_submit_button("Get AI feedback / suggestion")
 
     # Handle AI feedback request (only in Adaptive condition)
-    if ask_ai:
+       if ask_ai:
         if condition.startswith("Adaptive"):
-            ai_feedback = get_ai_feedback_on_text(
-                ex.get("source_text", ""),
-                ex.get("mt_text", ""),
-                student_text,
-                task_type
-            )
+            # Build a clear prompt for the HF model
+            prompt = f"""
+You are an expert English–Arabic translation trainer specialising in MT post-editing.
+
+SOURCE TEXT:
+{ex.get("source_text", "")}
+
+MT OUTPUT (if any):
+{ex.get("mt_text", "") or "(none)"}
+
+STUDENT VERSION:
+{student_text}
+
+Give concise bullet-point feedback (in Arabic where useful) on:
+1. Accuracy (meaning preserved or lost).
+2. Register (is the level of formality appropriate?).
+3. Idiomatic and culturally appropriate choices.
+4. Overall cohesion and style.
+
+Then, if helpful, propose one short improved version of 1–2 sentences, not the whole text.
+"""
+
+            ai_feedback = generate_ai_feedback(prompt)
+
             if ai_feedback:
-                st.markdown("### AI feedback / suggestion")
+                st.markdown("### AI feedback / suggestion (HuggingFace)")
                 st.write(ai_feedback)
+
                 # log interaction in session state
                 st.session_state[ai_log_key].append({
                     "timestamp": datetime.datetime.now().isoformat(),
@@ -1032,9 +1051,14 @@ def student_dashboard():
                 })
             else:
                 st.warning(
-                    "No AI backend is configured (HF_API_TOKEN not set or API unavailable). "
-                    "The adaptive condition will still record your work, but no AI suggestions are provided."
+                    "The AI feedback service could not be reached. "
+                    "Check HF_API_TOKEN or your internet connection."
                 )
+        else:
+            st.info(
+                "You are in the 'Traditional MTPE' condition. "
+                "AI suggestions are disabled for this task by design."
+            )
         else:
             st.info(
                 "You are in the 'Traditional MTPE' condition. "
