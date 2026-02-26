@@ -1036,7 +1036,7 @@ Then, if helpful, propose one short improved version of 1–2 sentences, not the
 
             ai_feedback = generate_ai_feedback(prompt)
 
-            if ai_feedback:
+    if ai_feedback:
                 st.markdown("### AI feedback / suggestion (HuggingFace)")
                 st.write(ai_feedback)
 
@@ -1049,17 +1049,17 @@ Then, if helpful, propose one short improved version of 1–2 sentences, not the
                     "student_text": student_text,
                     "ai_feedback": ai_feedback,
                 })
-            else:
+    else:
                 st.warning(
                     "The AI feedback service could not be reached. "
                     "Check HF_API_TOKEN or your internet connection."
                 )
-        else:
+    else:
             st.info(
                 "You are in the 'Traditional MTPE' condition. "
                 "AI suggestions are disabled for this task by design."
             )
-        else:
+    else:
             st.info(
                 "You are in the 'Traditional MTPE' condition. "
                 "Per the study design, AI suggestions are not used for this task."
