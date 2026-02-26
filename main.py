@@ -1010,61 +1010,53 @@ def student_dashboard():
             ask_ai = st.form_submit_button("Get AI feedback / suggestion")
 
     # Handle AI feedback request (only in Adaptive condition)
-    if ask_ai:
-          if condition.startswith("Adaptive"):
-            # Build a clear prompt for the HF model
-            prompt = f"""
-You are an expert English–Arabic translation trainer specialising in MT post-editing.
+   if ask_ai:
+    if condition.startswith("Adaptive"):
 
-SOURCE TEXT:
+        prompt = f"""
+You are an expert English–Arabic translation trainer.
+
+SOURCE:
 {ex.get("source_text", "")}
 
-MT OUTPUT (if any):
-{ex.get("mt_text", "") or "(none)"}
+MT OUTPUT:
+{ex.get("mt_text", "")}
 
 STUDENT VERSION:
 {student_text}
 
-Give concise bullet-point feedback (in Arabic where useful) on:
-1. Accuracy (meaning preserved or lost).
-2. Register (is the level of formality appropriate?).
-3. Idiomatic and culturally appropriate choices.
-4. Overall cohesion and style.
-
-Then, if helpful, propose one short improved version of 1–2 sentences, not the whole text.
+Give concise bullet-point feedback on:
+1. Accuracy
+2. Register
+3. Idiomatic use
+4. Style
 """
 
-            ai_feedback = generate_ai_feedback(prompt)
+        ai_feedback = generate_ai_feedback(prompt)
 
-    if ai_feedback:
-                st.markdown("### AI feedback / suggestion (HuggingFace)")
-                st.write(ai_feedback)
+        if ai_feedback:
+            st.markdown("### AI feedback / suggestion")
+            st.write(ai_feedback)
 
-                # log interaction in session state
-                st.session_state[ai_log_key].append({
-                    "timestamp": datetime.datetime.now().isoformat(),
-                    "condition": condition,
-                    "task_type": task_type,
-                    "source_excerpt": ex.get("source_text", "")[:300],
-                    "student_text": student_text,
-                    "ai_feedback": ai_feedback,
-                })
-    else:
-                st.warning(
-                    "The AI feedback service could not be reached. "
-                    "Check HF_API_TOKEN or your internet connection."
-                )
-    else:
-            st.info(
-                "You are in the 'Traditional MTPE' condition. "
-                "AI suggestions are disabled for this task by design."
-            )
-    else:
-            st.info(
-                "You are in the 'Traditional MTPE' condition. "
-                "Per the study design, AI suggestions are not used for this task."
+            st.session_state[ai_log_key].append({
+                "timestamp": datetime.datetime.now().isoformat(),
+                "condition": condition,
+                "task_type": task_type,
+                "student_text": student_text,
+                "ai_feedback": ai_feedback,
+            })
+
+        else:
+            st.warning(
+                "The AI feedback service could not be reached. "
+                "Check HF_API_TOKEN or your internet connection."
             )
 
+    else:
+        st.info(
+            "You are in the 'Traditional MTPE' condition. "
+            "AI suggestions are disabled for this task by design."
+        )
     if submitted:
         time_spent = time.time() - st.session_state[start_key]
         st.session_state[keys_key] = len(student_text)  # characters typed proxy
