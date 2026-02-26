@@ -506,7 +506,7 @@ def ai_generate_text(prompt: str):
     Currently uses HuggingFace Inference API if HF_API_TOKEN is set.
     If not configured or failing, returns None (graceful fallback).
     """
-    HF_TOKEN = os.getenv("HF_API_TOKEN", "")
+    HF_TOKEN = os.getenv("HF_API_TOKEN", "") or st.secrets.get("HF_API_TOKEN", "")
     if not HF_TOKEN:
         return None
     try:
