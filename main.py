@@ -1011,7 +1011,7 @@ def student_dashboard():
 
     # Handle AI feedback request (only in Adaptive condition)
        if ask_ai:
-        if condition.startswith("Adaptive"):
+          if condition.startswith("Adaptive"):
             # Build a clear prompt for the HF model
             prompt = f"""
 You are an expert English–Arabic translation trainer specialising in MT post-editing.
