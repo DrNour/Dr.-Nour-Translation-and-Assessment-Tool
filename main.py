@@ -1,9 +1,11 @@
 # main.py  — EduApp (single file, with Localisation Lab + sticker/text/image tasks)
+# Grant-oriented features:
 # - Evidence-based adaptive feedback (with concrete examples)
-# - Safer instructor login (env var or SHA256; fallback for dev)
-# - JSON storage maintained (no DB migration needed)
-# - Reflection capture, progress charts, class snapshot
+# - Safer instructor login (env var or SHA256; explicit dev-only fallback)
+# - JSON storage (no DB migration)
+# - Reflection capture, per-student progress charts, class snapshot
 # - Localisation Lab with configurable sticker/text/image tasks
+# - Optional AI-based feedback hook for adaptive MTPE condition
 # - Graceful fallbacks for optional libs; no crashes on missing deps
 
 import os
@@ -20,9 +22,23 @@ from difflib import SequenceMatcher, ndiff
 import datetime
 
 import streamlit as st
-import pandas as pd
-from docx import Document
-from docx.shared import RGBColor
+
+# Pandas is core; fail early with a clear message if missing
+try:
+    import pandas as pd
+except Exception as e:
+    st.error("This app requires pandas. Please install it with `pip install pandas`.")
+    raise e
+
+# Optional DOCX exports (graceful fallback)
+try:
+    from docx import Document
+    from docx.shared import RGBColor
+    _HAVE_DOCX = True
+except Exception:
+    Document = None
+    RGBColor = None
+    _HAVE_DOCX = False
 
 # Optional metrics deps (graceful fallback if missing)
 try:
@@ -54,7 +70,7 @@ EXERCISES_FILE = DATA_DIR / "exercises.json"
 SUBMISSIONS_FILE = DATA_DIR / "submissions.json"
 LEADERBOARD_FILE = DATA_DIR / "leaderboard.json"
 
-# NEW: localisation sticker/text/image tasks
+# localisation sticker/text/image tasks
 LOC_STICKERS_FILE = DATA_DIR / "loc_stickers.json"
 STICKER_IMG_DIR = DATA_DIR / "stickers"
 STICKER_IMG_DIR.mkdir(exist_ok=True)
@@ -85,18 +101,33 @@ def _env(name, default=""):
 # Set one of these before running (recommended):
 #   export INSTRUCTOR_PASSWORD_PLAIN='StrongPass'
 #   export INSTRUCTOR_PASSWORD_SHA256='<sha256 hex of StrongPass>'
+# For dev only (explicit opt-in):
+#   export INSTRUCTOR_DEV_MODE='1'   # allows fallback 'admin123'
 _INSTRUCTOR_PLAIN = _env("INSTRUCTOR_PASSWORD_PLAIN", "")
 _INSTRUCTOR_SHA256 = _env("INSTRUCTOR_PASSWORD_SHA256", "")
-_FALLBACK_PLAIN = "admin123"  # used only if env vars aren't set
+_INSTRUCTOR_DEV_MODE = _env("INSTRUCTOR_DEV_MODE", "0") == "1"
+_FALLBACK_PLAIN = "admin123"  # used only if DEV mode is explicitly enabled
+_IS_PASSWORD_CONFIGURED = bool(_INSTRUCTOR_PLAIN or _INSTRUCTOR_SHA256 or _INSTRUCTOR_DEV_MODE)
 
 def check_password(typed: str) -> bool:
+    """
+    Safer logic:
+    - Prefer SHA256 env
+    - Then plain env
+    - Only if INSTRUCTOR_DEV_MODE=1, allow fallback 'admin123'
+    - If nothing configured and no dev mode, reject all passwords
+    """
     try:
+        if not typed:
+            return False
         if _INSTRUCTOR_SHA256:
             h = hashlib.sha256(typed.encode("utf-8")).hexdigest()
             return h == _INSTRUCTOR_SHA256
         if _INSTRUCTOR_PLAIN:
             return typed == _INSTRUCTOR_PLAIN
-        return typed == _FALLBACK_PLAIN
+        if _INSTRUCTOR_DEV_MODE:
+            return typed == _FALLBACK_PLAIN
+        return False
     except Exception:
         return False  # never crash on login
 
@@ -131,6 +162,7 @@ def evaluate_translation(student_text, mt_text=None, reference=None, task_type="
       - chrF++ (sacrebleu, if reference provided)
       - BERTScore_F1 (if available & reference provided)
       - edit counts for post-edit tasks
+
     All metrics gracefully fallback to None if libs or references are missing.
     """
     src_len = max(1, len(_tokenize(source_text)))
@@ -188,7 +220,9 @@ def diff_text(baseline: str, student_text: str) -> str:
             parts.append(token)
     return _join_tokens_for_display(parts)
 
-def add_diff_to_doc(doc: Document, baseline: str, student_text: str):
+def add_diff_to_doc(doc, baseline: str, student_text: str):
+    if not _HAVE_DOCX:
+        return
     differ = ndiff(_tokenize(baseline), _tokenize(student_text))
     p = doc.add_paragraph()
     for w in differ:
@@ -205,6 +239,8 @@ def add_diff_to_doc(doc: Document, baseline: str, student_text: str):
 
 # ---------------- Exports ----------------
 def export_student_word(submissions, student_name):
+    if not _HAVE_DOCX:
+        return None
     doc = Document()
     doc.add_heading(f"Student: {student_name}", 0)
     subs = submissions.get(student_name, {})
@@ -226,12 +262,20 @@ def export_student_word(submissions, student_name):
 
         metrics = sub.get("metrics", {})
         doc.add_paragraph(f"Metrics: {metrics}")
+        fb = sub.get("feedback")
+        if fb:
+            doc.add_paragraph("Feedback:")
+            for line in fb:
+                doc.add_paragraph(line, style="List Bullet")
         doc.add_paragraph(f"Task Type: {sub.get('task_type','')}")
         doc.add_paragraph(f"Time Spent: {sub.get('time_spent_sec', 0):.2f} sec")
         doc.add_paragraph(f"Characters (not keystrokes): {sub.get('keystrokes', 0)}")
         if sub.get("reflection"):
             doc.add_paragraph("Reflection:")
             doc.add_paragraph(sub.get("reflection"))
+        if sub.get("ai_literacy_reflection"):
+            doc.add_paragraph("AI Literacy Reflection:")
+            doc.add_paragraph(sub.get("ai_literacy_reflection"))
         doc.add_paragraph("---")
 
     buf = BytesIO()
@@ -244,10 +288,14 @@ def export_summary_excel(submissions):
     for student, subs in submissions.items():
         for ex_id, sub in subs.items():
             m = sub.get("metrics", {})
+            fb = sub.get("feedback") or []
             rows.append({
                 "Student": student,
                 "Exercise": ex_id,
                 "Task Type": sub.get("task_type", ""),
+                "Condition": sub.get("condition", ""),
+                "Level": sub.get("level", ""),
+                "Direction": sub.get("direction", ""),
                 "Length Ratio": m.get("length_ratio"),
                 "BLEU": m.get("BLEU"),
                 "chrF++": m.get("chrF++"),
@@ -256,11 +304,53 @@ def export_summary_excel(submissions):
                 "Deletions": m.get("deletions"),
                 "Edits": m.get("edits"),
                 "Time Spent (s)": sub.get("time_spent_sec", 0),
-                "Characters Typed": sub.get("keystrokes", 0)
+                "Characters Typed": sub.get("keystrokes", 0),
+                "Reflection": sub.get("reflection", ""),
+                "AI Literacy Reflection": sub.get("ai_literacy_reflection", ""),
+                "First Feedback Item": fb[0] if fb else "",
             })
     df = pd.DataFrame(rows)
     buf = BytesIO()
     df.to_excel(buf, index=False)
+    buf.seek(0)
+    return buf
+
+# Anonymised MTPE corpus export (CSV) for research
+def export_anonymised_corpus(submissions):
+    """
+    Returns a CSV buffer with:
+    - anonymised student ID (hashed)
+    - exercise ID
+    - task type, condition, level, direction
+    - source, MT, student text
+    - timing/keystrokes
+    - metrics as JSON string
+    - counts of AI interactions
+    """
+    rows = []
+    for student, subs in submissions.items():
+        anon_id = hashlib.sha256(student.encode("utf-8")).hexdigest()[:10]
+        for ex_id, sub in subs.items():
+            metrics = sub.get("metrics", {})
+            ai_interactions = sub.get("ai_interactions", []) or []
+            rows.append({
+                "AnonID": anon_id,
+                "Exercise": ex_id,
+                "TaskType": sub.get("task_type", ""),
+                "Condition": sub.get("condition", ""),
+                "Level": sub.get("level", ""),
+                "Direction": sub.get("direction", ""),
+                "SourceText": sub.get("source_text", ""),
+                "MTText": sub.get("mt_text", ""),
+                "StudentText": sub.get("student_text", ""),
+                "TimeSpent_sec": sub.get("time_spent_sec", 0),
+                "CharactersTyped": sub.get("keystrokes", 0),
+                "MetricsJSON": json.dumps(metrics, ensure_ascii=False),
+                "AIInteractionCount": len(ai_interactions),
+            })
+    df = pd.DataFrame(rows)
+    buf = BytesIO()
+    df.to_csv(buf, index=False)
     buf.seek(0)
     return buf
 
@@ -287,9 +377,16 @@ def show_leaderboard():
 def localisation_sticker_manager():
     st.subheader("Instructor – Sticker / text / image localisation tasks")
 
+    if not _IS_PASSWORD_CONFIGURED:
+        st.info(
+            "Instructor password is not configured. "
+            "Set INSTRUCTOR_PASSWORD_PLAIN or INSTRUCTOR_PASSWORD_SHA256 "
+            "(optionally INSTRUCTOR_DEV_MODE=1 for a dev fallback)."
+        )
+
     pwd = st.text_input("Instructor password", type="password", key="loc_sticker_pwd")
     if not check_password(pwd):
-        st.info("Enter instructor password to manage these tasks.")
+        st.info("Enter a valid instructor password to manage these tasks.")
         return
 
     loc_stickers = load_json(LOC_STICKERS_FILE)
@@ -402,9 +499,14 @@ def localisation_sticker_manager():
         save_json(LOC_STICKERS_FILE, loc_stickers)
         st.success(f"Task {selection} deleted.")
 
-# ---------------- Optional AI generator (safe off) ----------------
-def ai_generate_text(prompt):
-    HF_TOKEN = ""  # Leave empty for safety
+# ---------------- Optional AI generator & feedback helper ----------------
+def ai_generate_text(prompt: str):
+    """
+    Generic text generation hook.
+    Currently uses HuggingFace Inference API if HF_API_TOKEN is set.
+    If not configured or failing, returns None (graceful fallback).
+    """
+    HF_TOKEN = os.getenv("HF_API_TOKEN", "")
     if not HF_TOKEN:
         return None
     try:
@@ -424,6 +526,44 @@ def ai_generate_text(prompt):
     except Exception:
         pass
     return None
+
+def get_ai_feedback_on_text(source_text: str, mt_text: str, student_text: str, task_type: str):
+    """
+    Wraps ai_generate_text with a prompt geared towards:
+    - accuracy
+    - register
+    - idiomatic fidelity
+    - stylistic appropriateness
+
+    Returns a string (feedback/suggestions) or None if no backend configured.
+    """
+    base_prompt = """
+You are an expert English–Arabic translation trainer focusing on Machine Translation Post-Editing (MTPE).
+Analyse the student's current version in relation to the source (and MT output if given).
+Comment briefly (bullet points) on:
+
+1. Accuracy (meaning preservation)
+2. Register (formality, appropriateness for context)
+3. Idiomatic expressions and culturally bound elements
+4. Overall coherence and style
+
+Then, if helpful, suggest ONE revised version of 1–2 sentences that illustrates better choices,
+but keep your answer under 250 words.
+
+Use Arabic where appropriate in examples.
+"""
+    parts = [
+        base_prompt.strip(),
+        "\n\n=== SOURCE TEXT ===\n",
+        source_text or "(none)",
+        "\n\n=== MT OUTPUT (if any) ===\n",
+        mt_text or "(none)",
+        "\n\n=== STUDENT VERSION ===\n",
+        student_text or "(empty)",
+        f"\n\nTask type: {task_type}\n"
+    ]
+    prompt = "".join(parts)
+    return ai_generate_text(prompt)
 
 # ---------------- Evidence-based Linguistic Hints ----------------
 _AR_LETTERS = r"\u0600-\u06FF"  # Arabic Unicode block
@@ -510,8 +650,11 @@ def quick_linguistic_hints(source_text: str, student_text: str):
         pass
     return hints
 
-# ---------------- Adaptive Feedback (varied phrasing + evidence) ----------------
+# ---------------- Adaptive Feedback ----------------
 def generate_feedback(metrics: dict, task_type: str, source_text: str, student_text: str, extra_hints=None):
+    """
+    Return a list of bullet strings that explicitly mention the metric thresholds/evidence.
+    """
     msgs = []
     lr = metrics.get("length_ratio")
     edits = int(metrics.get("edits", 0) or 0)
@@ -525,37 +668,37 @@ def generate_feedback(metrics: dict, task_type: str, source_text: str, student_t
         if edits == 0:
             msgs.append(("edits_none",
                          "No edits were applied to the MT output.",
-                         "Review the MT carefully—critical errors may remain."))
+                         "Edits = 0; review the MT carefully—critical errors may remain."))
         elif edits > 20:
             msgs.append(("edits_many",
                          f"High edit volume detected: {edits} edits (additions {adds}, deletions {dels}).",
-                         "Prioritize adequacy/accuracy first; avoid cosmetic rephrasing that doesn’t fix meaning."))
+                         "Focus on adequacy first; too many surface edits can hide missed meaning issues."))
 
     # 2) Length ratio diagnostics
     if lr is not None:
         if lr < 0.80:
             msgs.append(("len_low",
-                         f"Length ratio is {lr:.2f} (target ~0.90–1.20).",
-                         "Your translation may be over-compressed—recheck for omitted content."))
+                         f"Your length ratio is {lr:.2f} (target ≈ 0.90–1.20).",
+                         "This suggests compression/omissions; check if any propositions or modifiers were dropped."))
         elif lr > 1.30:
             msgs.append(("len_high",
-                         f"Length ratio is {lr:.2f} (target ~0.90–1.20).",
-                         "Consider concision—trim redundancy and literal padding."))
+                         f"Your length ratio is {lr:.2f} (target ≈ 0.90–1.20).",
+                         "Text may be over-expanded; look for repetition or overly literal padding."))
 
     # 3) Metric interplay (accuracy vs fluency)
     if bleu is not None and chrf is not None:
         if bleu < 30 <= chrf:
             msgs.append(("acc_low_flu_ok",
-                         f"chrF++ is {chrf:.1f} (fluency ok) but BLEU is {bleu:.1f} (accuracy lagging).",
-                         "Revisit terminology and key meaning units; cross-check against the source."))
+                         f"chrF++ is {chrf:.1f} (character-level similarity ok) but BLEU is {bleu:.1f} (segment overlap low).",
+                         "Terminology/lexical choices may diverge from a typical solution—revisit key terms and content words."))
         elif bleu >= 30 and chrf < 50:
             msgs.append(("flu_low_acc_ok",
-                         f"BLEU is {bleu:.1f} (accuracy acceptable) but chrF++ is {chrf:.1f} (fluency weak).",
-                         "Polish cohesion and flow—simplify long clauses and connectors."))
+                         f"BLEU is {bleu:.1f} (content roughly aligned) but chrF++ is {chrf:.1f} (lower fluency).",
+                         "Try smoothing longer clauses, connectors, and sentence rhythm to improve readability."))
         elif bleu is not None and bleu < 20:
             msgs.append(("both_low",
-                         f"BLEU is {bleu:.1f}.",
-                         "Start with adequacy: ensure all propositions are conveyed before stylistic edits."))
+                         f"BLEU is {bleu:.1f}, which is in a low range.",
+                         "Start by checking whether every idea in the source is present before polishing style."))
 
     # 4) Integrate extra hints (numbers/terms/quotes) with evidence
     if extra_hints:
@@ -586,9 +729,17 @@ def generate_feedback(metrics: dict, task_type: str, source_text: str, student_t
 # ---------------- Instructor Dashboard (Core Translation Lab) ----------------
 def instructor_dashboard():
     st.title("Instructor Dashboard")
+
+    if not _IS_PASSWORD_CONFIGURED:
+        st.info(
+            "Instructor password is not configured. "
+            "Set INSTRUCTOR_PASSWORD_PLAIN or INSTRUCTOR_PASSWORD_SHA256 for production use. "
+            "Optionally, use INSTRUCTOR_DEV_MODE=1 with fallback 'admin123' in a dev environment only."
+        )
+
     password = st.text_input("Enter instructor password", type="password")
     if not check_password(password):
-        st.warning("Incorrect password. Access denied.")
+        st.warning("Incorrect password or password not configured. Access denied.")
         return
 
     exercises = load_json(EXERCISES_FILE)
@@ -652,7 +803,7 @@ def instructor_dashboard():
         st.success(f"Exercise saved as ID {next_id}")
 
     st.subheader("Download Exercises")
-    if exercises:
+    if exercises and _HAVE_DOCX:
         for ex_id, ex in exercises.items():
             try:
                 buf = BytesIO()
@@ -673,6 +824,8 @@ def instructor_dashboard():
                 )
             except Exception:
                 st.info(f"Exercise {ex_id}: export not available (DOCX error).")
+    elif exercises and not _HAVE_DOCX:
+        st.info("Word export is disabled because python-docx is not installed.")
     else:
         st.info("No exercises yet.")
 
@@ -681,13 +834,16 @@ def instructor_dashboard():
         student_choice = st.selectbox("Choose student", ["All"] + list(submissions.keys()))
         if student_choice != "All":
             buf = export_student_word(submissions, student_choice)
-            safe_name = re.sub(r"[^\w\-]+", "_", student_choice)
-            st.download_button(
-                f"Download {student_choice}'s Submissions (Word)",
-                buf,
-                file_name=f"{safe_name}_submissions.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            )
+            if buf is not None:
+                safe_name = re.sub(r"[^\w\-]+", "_", student_choice)
+                st.download_button(
+                    f"Download {student_choice}'s Submissions (Word)",
+                    buf,
+                    file_name=f"{safe_name}_submissions.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                )
+            else:
+                st.info("Word export unavailable (python-docx not installed).")
 
         st.subheader("Download Metrics Summary (Excel)")
         excel_buf = export_summary_excel(submissions)
@@ -698,9 +854,18 @@ def instructor_dashboard():
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
+        st.subheader("Download anonymised MTPE corpus (CSV)")
+        anon_buf = export_anonymised_corpus(submissions)
+        st.download_button(
+            "Download anonymised corpus",
+            anon_buf,
+            file_name="mtpe_corpus_anon.csv",
+            mime="text/csv"
+        )
+
         # Class Snapshot (mean chrF++ per exercise)
         try:
-            st.subheader("Class Snapshot")
+            st.subheader("Class Snapshot (chrF++)")
             rows = []
             for ex_id2, ex in exercises.items():
                 vals = []
@@ -714,11 +879,32 @@ def instructor_dashboard():
                     mean_val = round(sum(vals) / max(1, len(vals)), 2)
                     rows.append({"Exercise": ex_id2, "chrF++ mean": mean_val, "n": len(vals)})
             if rows:
-                st.dataframe(pd.DataFrame(rows))
+                df_snapshot = pd.DataFrame(rows)
+                st.dataframe(df_snapshot, use_container_width=True)
             else:
                 st.info("No metrics yet to summarize.")
         except Exception:
             st.info("Snapshot unavailable (aggregation error).")
+
+        # Reflection snapshot
+        try:
+            st.subheader("Reflection Snapshot (by exercise)")
+            refl_rows = []
+            for student, subs in submissions.items():
+                for ex_id2, sub in subs.items():
+                    refl = (sub.get("reflection") or "").strip()
+                    if refl:
+                        refl_rows.append({
+                            "Exercise": ex_id2,
+                            "Student": student,
+                            "Reflection (snippet)": (refl[:120] + "…") if len(refl) > 120 else refl
+                        })
+            if refl_rows:
+                st.dataframe(pd.DataFrame(refl_rows), use_container_width=True)
+            else:
+                st.info("No reflections recorded yet.")
+        except Exception:
+            st.info("Reflection snapshot unavailable.")
 
         show_leaderboard()
     else:
@@ -734,9 +920,36 @@ def student_dashboard():
         return
 
     submissions = load_json(SUBMISSIONS_FILE)
-    student_name = st.text_input("Enter your name")
+
+    student_name = st.text_input("Enter your name or student ID")
     if not student_name:
         return
+
+    # Course level + direction (for research covariates)
+    col_lvl, col_dir = st.columns(2)
+    with col_lvl:
+        level = st.selectbox(
+            "Course level (for research use)",
+            ["Not specified", "Beginner", "Intermediate", "Advanced"],
+            index=0
+        )
+    with col_dir:
+        direction = st.selectbox(
+            "Translation direction",
+            ["Not specified", "EN → AR", "AR → EN"],
+            index=0
+        )
+
+    # Study condition (adaptive vs traditional)
+    condition = st.radio(
+        "Study condition (set by your instructor)",
+        ["Traditional MTPE", "Adaptive MTPE (AI-assisted)"],
+        index=0,
+        help=(
+            "Traditional MTPE = no AI suggestions are used for this task.\n"
+            "Adaptive MTPE = you may request AI feedback/suggestions during post-editing."
+        )
+    )
 
     # Ensure per-student container in JSON
     if student_name not in submissions:
@@ -761,10 +974,14 @@ def student_dashboard():
     # Session keys unique per student/exercise
     start_key = f"start_time_{student_name}_{ex_id}"
     keys_key = f"chars_{student_name}_{ex_id}"
+    ai_log_key = f"ai_log_{student_name}_{ex_id}"
+
     if start_key not in st.session_state:
         st.session_state[start_key] = time.time()
     if keys_key not in st.session_state:
         st.session_state[keys_key] = 0
+    if ai_log_key not in st.session_state:
+        st.session_state[ai_log_key] = []
 
     with st.form(key=f"exercise_form_{student_name}_{ex_id}"):
         student_text = st.text_area(
@@ -772,8 +989,56 @@ def student_dashboard():
             initial_text,
             height=300
         )
-        reflection = st.text_area("Brief reflection (what changed / why?)", "", height=80)
-        submitted = st.form_submit_button("Submit")
+        reflection = st.text_area(
+            "Brief reflection (what changed / why?)",
+            "",
+            height=80
+        )
+        ai_lit_reflection = st.text_area(
+            "AI literacy reflection (optional):\n"
+            "- If you used MT/AI, did you notice hallucinations, bias, register problems, or copyright issues?\n"
+            "- How did you decide when to trust or override the machine output?",
+            "",
+            height=120
+        )
+
+        col_submit, col_ai = st.columns(2)
+        with col_submit:
+            submitted = st.form_submit_button("Submit")
+        with col_ai:
+            ask_ai = st.form_submit_button("Get AI feedback / suggestion")
+
+    # Handle AI feedback request (only in Adaptive condition)
+    if ask_ai:
+        if condition.startswith("Adaptive"):
+            ai_feedback = get_ai_feedback_on_text(
+                ex.get("source_text", ""),
+                ex.get("mt_text", ""),
+                student_text,
+                task_type
+            )
+            if ai_feedback:
+                st.markdown("### AI feedback / suggestion")
+                st.write(ai_feedback)
+                # log interaction in session state
+                st.session_state[ai_log_key].append({
+                    "timestamp": datetime.datetime.now().isoformat(),
+                    "condition": condition,
+                    "task_type": task_type,
+                    "source_excerpt": ex.get("source_text", "")[:300],
+                    "student_text": student_text,
+                    "ai_feedback": ai_feedback,
+                })
+            else:
+                st.warning(
+                    "No AI backend is configured (HF_API_TOKEN not set or API unavailable). "
+                    "The adaptive condition will still record your work, but no AI suggestions are provided."
+                )
+        else:
+            st.info(
+                "You are in the 'Traditional MTPE' condition. "
+                "Per the study design, AI suggestions are not used for this task."
+            )
 
     if submitted:
         time_spent = time.time() - st.session_state[start_key]
@@ -782,21 +1047,36 @@ def student_dashboard():
         metrics = evaluate_translation(
             student_text,
             mt_text=ex.get("mt_text"),
-            reference=None,  # plug in a gold reference here if available
+            reference=None,
             task_type=task_type,
             source_text=ex.get("source_text", "")
         )
 
-        # Persist submission
+        extra = quick_linguistic_hints(ex.get("source_text",""), student_text)
+        feedback_msgs = generate_feedback(
+            metrics,
+            task_type,
+            ex.get("source_text",""),
+            student_text,
+            extra
+        )
+
+        # Persist submission (including research fields and AI interactions)
         submissions[student_name][ex_id] = {
             "source_text": ex.get("source_text", ""),
             "mt_text": ex.get("mt_text"),
             "student_text": student_text,
             "task_type": task_type,
             "time_spent_sec": round(time_spent, 2),
-            "keystrokes": st.session_state[keys_key],  # actually characters
+            "keystrokes": st.session_state[keys_key],
             "metrics": metrics,
-            "reflection": reflection
+            "reflection": reflection,
+            "ai_literacy_reflection": ai_lit_reflection,
+            "feedback": feedback_msgs,
+            "condition": condition,
+            "level": level,
+            "direction": direction,
+            "ai_interactions": st.session_state[ai_log_key],
         }
         save_json(SUBMISSIONS_FILE, submissions)
 
@@ -806,7 +1086,7 @@ def student_dashboard():
             if metrics.get("BLEU") is not None:
                 points += int(metrics["BLEU"])
             if metrics.get("chrF++") is not None:
-                points += int(metrics["chrF++"] / 2)  # dampen chrF
+                points += int(metrics["chrF++"] / 2)
             if task_type == "Post-edit MT":
                 points += max(0, 10 - int(metrics["edits"]))
         except Exception:
@@ -829,11 +1109,10 @@ def student_dashboard():
 - **Edits**: {_fmt(metrics['edits'])}
 - **Time Spent**: {round(time_spent, 2)} sec
 - **Characters Typed**: {st.session_state[keys_key]}
+- **Condition**: {condition}
 """)
 
-        # Adaptive feedback (varied + evidence)
-        extra = quick_linguistic_hints(ex.get("source_text",""), student_text)
-        feedback_msgs = generate_feedback(metrics, task_type, ex.get("source_text",""), student_text, extra)
+        # Adaptive feedback
         st.subheader("Adaptive Feedback")
         if feedback_msgs:
             for m in feedback_msgs:
@@ -950,6 +1229,15 @@ def localisation_lab():
             source_text=source_text,
         )
 
+        extra = quick_linguistic_hints(source_text, main_text)
+        feedback_msgs = generate_feedback(
+            metrics,
+            "Localisation",
+            source_text,
+            main_text,
+            extra_hints=extra,
+        )
+
         # Build submission record
         submissions[student_name][ex_id] = {
             "source_text": source_text,
@@ -960,6 +1248,7 @@ def localisation_lab():
             "keystrokes": keystrokes,
             "metrics": metrics,
             "reflection": reflection_text,
+            "feedback": feedback_msgs,
         }
         save_json(SUBMISSIONS_FILE, submissions)
 
@@ -986,15 +1275,6 @@ def localisation_lab():
         st.write(f"• BERTScore F1: {_fmt(metrics['BERTScore_F1'])}")
         st.write(f"• Time Spent: {round(time_spent, 2)} sec")
         st.write(f"• Characters Typed: {keystrokes}")
-
-        extra = quick_linguistic_hints(source_text, main_text)
-        feedback_msgs = generate_feedback(
-            metrics,
-            "Localisation",
-            source_text,
-            main_text,
-            extra_hints=extra,
-        )
 
         st.subheader("Adaptive Feedback")
         if feedback_msgs:
@@ -1146,7 +1426,6 @@ def localisation_lab():
                 "Decision on Black Friday:\n" + bf_choice + "\n" + bf_notes.strip() + "\n\n"
                 "Seasonal adaptation notes:\n" + season_notes.strip()
             )
-            # Use the Gulf-localised version as main text
             save_loc_submission(ex_id, source_text, gulf, reflection)
 
     def exercise_3():
@@ -1536,7 +1815,7 @@ def main():
 
     st.markdown(
         "<div style='padding:8px;border:1px solid #ddd;border-radius:8px;background:#f7f9ff'>"
-        "<b>EduApp – Build:</b> 2025-11-10 v4 (translation + localisation lab)</div>",
+        "<b>EduApp – Build:</b> 2025-11-10 v5 (translation + localisation lab, grant-aligned)</div>",
         unsafe_allow_html=True
     )
 
