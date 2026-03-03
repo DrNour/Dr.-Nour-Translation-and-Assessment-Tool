@@ -24,3 +24,7 @@ reportlab>=4.1.0
 
 # HTTP requests for optional Hugging Face integration
 requests>=2.32.0
+
+# Optional plotting (used in progress charts)
+matplotlib>=3.8.0
+
